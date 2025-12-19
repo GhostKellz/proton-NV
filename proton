@@ -1,0 +1,198 @@
+#!/bin/bash
+#
+# Proton-NV - NVIDIA-Optimized Proton for Linux Gaming
+#
+# Targets:
+# - NVIDIA Open Kernel Module 590+ (590.48.01 recommended)
+# - RTX 40/50 series GPUs
+# - CachyOS kernel / Linux-tkg with BORE+EEVDF
+# - Kernel 6.17/6.18+ with gaming optimizations
+#
+# Based on Valve's Proton with:
+# - Proton-GE patches (VK_NV_low_latency2, FSR, etc.)
+# - NVIDIA-specific tuning (benefits from 590 swapchain fixes)
+# - CachyOS/tkg scheduler integration
+#
+
+PROTON_NV_VERSION="1.1"
+
+# Get script directory
+PROTON_NV_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+###############################################################################
+# Environment Setup
+###############################################################################
+
+# NVIDIA Open Driver optimizations
+export __GL_YIELD="${__GL_YIELD:-USLEEP}"
+export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
+export __GL_SHADER_DISK_CACHE="${__GL_SHADER_DISK_CACHE:-1}"
+export __GL_SHADER_DISK_CACHE_SKIP_CLEANUP="${__GL_SHADER_DISK_CACHE_SKIP_CLEANUP:-1}"
+export VK_LAYER_NV_optimus="${VK_LAYER_NV_optimus:-NVIDIA_only}"
+
+# DXVK async shader compilation (reduces stuttering)
+export DXVK_ASYNC="${DXVK_ASYNC:-1}"
+
+# Enable NVAPI for DXVK (required for DLSS, Reflex)
+export DXVK_ENABLE_NVAPI="${DXVK_ENABLE_NVAPI:-1}"
+export PROTON_ENABLE_NVAPI="${PROTON_ENABLE_NVAPI:-1}"
+
+# Enable Reflex low latency (VK_NV_low_latency2)
+export PROTON_ENABLE_REFLEX="${PROTON_ENABLE_REFLEX:-1}"
+
+# Wine/Proton sync primitives
+export PROTON_NO_ESYNC="${PROTON_NO_ESYNC:-0}"
+export PROTON_NO_FSYNC="${PROTON_NO_FSYNC:-0}"
+
+# Large address aware for 32-bit games
+export PROTON_FORCE_LARGE_ADDRESS_AWARE="${PROTON_FORCE_LARGE_ADDRESS_AWARE:-1}"
+
+# VRR/G-Sync support
+export __GL_VRR_ALLOWED="${__GL_VRR_ALLOWED:-1}"
+
+###############################################################################
+# BORE + EEVDF Scheduler Detection & Tuning
+###############################################################################
+
+detect_and_apply_scheduler_tuning() {
+    local scheduler=""
+
+    # Detect BORE+EEVDF (CachyOS/tkg)
+    if [ -f /sys/kernel/debug/sched/features ]; then
+        local features=$(cat /sys/kernel/debug/sched/features 2>/dev/null || echo "")
+        if echo "$features" | grep -q "BORE"; then
+            scheduler="bore"
+        fi
+    fi
+
+    # Check kernel name (CachyOS, tkg, Zen all use BORE)
+    local kver=$(uname -r)
+    if echo "$kver" | grep -qiE "(cachyos|tkg|zen)"; then
+        scheduler="bore"
+    fi
+
+    if [ "$scheduler" = "bore" ] && [ "${PROTON_NV_SCHEDULER_TUNING:-1}" = "1" ]; then
+        # Apply BORE-optimized scheduler parameters if we have access
+        if [ -w /proc/sys/kernel/sched_latency_ns ]; then
+            echo 3000000 > /proc/sys/kernel/sched_latency_ns 2>/dev/null
+        fi
+        if [ -w /proc/sys/kernel/sched_min_granularity_ns ]; then
+            echo 400000 > /proc/sys/kernel/sched_min_granularity_ns 2>/dev/null
+        fi
+        if [ -w /proc/sys/kernel/sched_wakeup_granularity_ns ]; then
+            echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns 2>/dev/null
+        fi
+        # BORE burst tolerance for frame rendering
+        if [ -w /proc/sys/kernel/sched_burst_cache_lifetime ]; then
+            echo 60000000 > /proc/sys/kernel/sched_burst_cache_lifetime 2>/dev/null
+        fi
+        export PROTON_NV_BORE_ENABLED=1
+    fi
+}
+
+###############################################################################
+# NVIDIA GPU Detection
+###############################################################################
+
+detect_nvidia_gpu() {
+    local gpu_info=""
+
+    if command -v nvidia-smi &>/dev/null; then
+        gpu_info=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1)
+    fi
+
+    if [ -n "$gpu_info" ]; then
+        # Check for RTX 50 series
+        if echo "$gpu_info" | grep -qE "RTX\s*(50[0-9][0-9]|5090|5080|5070)"; then
+            export PROTON_NV_GPU_SERIES="50"
+            export PROTON_NV_RTX50=1
+        # Check for RTX 40 series
+        elif echo "$gpu_info" | grep -qE "RTX\s*(40[0-9][0-9]|4090|4080|4070|4060)"; then
+            export PROTON_NV_GPU_SERIES="40"
+            export PROTON_NV_RTX40=1
+        fi
+
+        # Check driver version
+        local driver_ver=$(echo "$gpu_info" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        local driver_major=$(echo "$driver_ver" | cut -d. -f1)
+
+        if [ "${driver_major:-0}" -ge 590 ]; then
+            export PROTON_NV_OPEN_DRIVER=1
+            export PROTON_NV_590_SWAPCHAIN_FIX=1  # 590+ swapchain perf improvements
+        elif [ "${driver_major:-0}" -ge 580 ]; then
+            export PROTON_NV_OPEN_DRIVER=1
+        fi
+    fi
+}
+
+###############################################################################
+# Gamemode Integration
+###############################################################################
+
+setup_gamemode() {
+    if [ "${PROTON_USE_GAMEMODE:-0}" = "1" ]; then
+        if command -v gamemoderun &>/dev/null; then
+            export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}libgamemodeauto.so.0"
+        fi
+    fi
+}
+
+###############################################################################
+# Main Execution
+###############################################################################
+
+# Apply optimizations
+detect_nvidia_gpu
+detect_and_apply_scheduler_tuning
+setup_gamemode
+
+# Load Proton-NV config if present
+if [ -f "$PROTON_NV_DIR/proton-nv/proton-nv.conf" ]; then
+    source "$PROTON_NV_DIR/proton-nv/proton-nv.conf"
+fi
+
+# Load user overrides
+if [ -f "$HOME/.config/proton-nv/config" ]; then
+    source "$HOME/.config/proton-nv/config"
+fi
+
+# Execute the actual Proton
+# This calls the upstream proton script with all our environment set
+if [ -f "$PROTON_NV_DIR/proton.real" ]; then
+    exec "$PROTON_NV_DIR/proton.real" "$@"
+elif [ -f "$PROTON_NV_DIR/files/bin/proton" ]; then
+    exec "$PROTON_NV_DIR/files/bin/proton" "$@"
+else
+    # Fallback: we ARE the proton script wrapper
+    # Find the actual wine/proton binary
+    WINE="$PROTON_NV_DIR/files/bin/wine64"
+    WINEPREFIX="${STEAM_COMPAT_DATA_PATH}/pfx"
+
+    if [ ! -d "$WINEPREFIX" ]; then
+        mkdir -p "$WINEPREFIX"
+    fi
+
+    export WINEPREFIX
+    export WINE
+
+    # Handle Proton verbs
+    case "$1" in
+        waitforexitandrun)
+            shift
+            exec "$WINE" "$@"
+            ;;
+        run)
+            shift
+            exec "$WINE" "$@"
+            ;;
+        getcompatpath)
+            echo "$WINEPREFIX"
+            ;;
+        getnativepath)
+            echo "$2" | sed 's|\\|/|g'
+            ;;
+        *)
+            exec "$WINE" "$@"
+            ;;
+    esac
+fi

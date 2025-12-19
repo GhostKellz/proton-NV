@@ -1,0 +1,308 @@
+# Proton-NV Makefile
+# NVIDIA-optimized Proton build system
+#
+# Based on Proton-GE and proton-tkg patterns
+# Optimized for RTX 40/50 + NVIDIA Open Kernel Module 580+
+
+.PHONY: all fetch patch build install clean dist help
+.SECONDEXPANSION:
+
+SHELL := /bin/bash
+
+# Directories
+SRC := $(SRCDIR)
+OBJ := $(CURDIR)
+UPSTREAM_DIR := $(OBJ)/upstream
+BUILD_DIR := $(OBJ)/build
+DIST_DIR := $(OBJ)/dist
+INSTALL_DIR := $(HOME)/.local/share/Steam/compatibilitytools.d
+
+# Build timestamp
+BUILD_DATE := $(shell date +%Y%m%d)
+FULL_VERSION := $(PROTON_NV_VERSION)-$(BUILD_DATE)
+DIST_NAME := $(BUILD_NAME)-$(FULL_VERSION)
+
+# Compiler flags optimized for NVIDIA + CachyOS/tkg-bore
+# These assume modern AMD64 with AVX2 (RTX 40/50 systems)
+COMMON_CFLAGS := -O3 -march=x86-64-v3 -mtune=generic
+COMMON_CFLAGS += -fno-semantic-interposition
+COMMON_CFLAGS += -fipa-pta
+COMMON_CFLAGS += -fdevirtualize-at-ltrans
+COMMON_CFLAGS += -fno-plt
+COMMON_CFLAGS += -pipe
+
+# CachyOS-style LTO flags
+LTO_CFLAGS := -flto=auto -flto-compression-level=3
+LTO_LDFLAGS := -flto=auto -Wl,-O3 -Wl,--as-needed
+
+# NVIDIA-specific defines
+NVIDIA_DEFINES := -DNVIDIA_OPEN_DRIVER
+NVIDIA_DEFINES += -DNVIDIA_MIN_DRIVER_VERSION=$(NVIDIA_OPEN_DRIVER_MIN)
+NVIDIA_DEFINES += -DVK_NV_LOW_LATENCY2_ENABLED=1
+NVIDIA_DEFINES += -DBAR1_AWARE_ALLOCATOR=1
+
+# Wine/Proton build flags
+WINE_CFLAGS := $(COMMON_CFLAGS) $(NVIDIA_DEFINES)
+WINE_LDFLAGS := $(LTO_LDFLAGS)
+
+# DXVK build flags (async enabled by default)
+DXVK_CFLAGS := $(COMMON_CFLAGS) -DDXVK_ASYNC=1
+DXVK_DEFINES := -DDXVK_NVAPI_ALLOW_OTHER_DRIVERS=0
+
+# vkd3d-proton flags
+VKD3D_CFLAGS := $(COMMON_CFLAGS)
+
+# Export for sub-makes
+export CFLAGS := $(COMMON_CFLAGS)
+export CXXFLAGS := $(COMMON_CFLAGS)
+export LDFLAGS := $(LTO_LDFLAGS)
+
+##
+## Main targets
+##
+
+all: fetch patch build dist
+	@echo "========================================"
+	@echo "Proton-NV $(FULL_VERSION) build complete!"
+	@echo "========================================"
+	@echo "Run 'make install' to install to Steam"
+
+help:
+	@echo "Proton-NV Build System"
+	@echo "======================"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all       - Full build (fetch + patch + build + dist)"
+	@echo "  fetch     - Clone/update upstream sources"
+	@echo "  patch     - Apply Proton-NV patches"
+	@echo "  build     - Compile all components"
+	@echo "  dist      - Create distribution package"
+	@echo "  install   - Install to Steam compatibilitytools.d"
+	@echo "  clean     - Remove build artifacts"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  Version:    $(FULL_VERSION)"
+	@echo "  Target:     NVIDIA Open $(NVIDIA_OPEN_DRIVER_MIN)+ / RTX 40-50"
+	@echo ""
+
+##
+## Fetch upstream sources
+##
+
+fetch: $(UPSTREAM_DIR)/.fetched
+
+$(UPSTREAM_DIR)/.fetched:
+	@echo ">>> Fetching upstream sources..."
+	@mkdir -p $(UPSTREAM_DIR)
+
+	@# Clone or update Proton
+	@if [ ! -d "$(UPSTREAM_DIR)/proton" ]; then \
+		echo "Cloning Proton ($(PROTON_COMMIT))..."; \
+		git clone --depth=1 -b $(PROTON_COMMIT) \
+			https://github.com/ValveSoftware/Proton.git \
+			$(UPSTREAM_DIR)/proton; \
+		cd $(UPSTREAM_DIR)/proton && git submodule update --init --recursive --depth=1; \
+	else \
+		echo "Updating Proton..."; \
+		cd $(UPSTREAM_DIR)/proton && git fetch && git checkout $(PROTON_COMMIT); \
+	fi
+
+	@# Clone DXVK
+	@if [ ! -d "$(UPSTREAM_DIR)/dxvk" ]; then \
+		echo "Cloning DXVK ($(DXVK_COMMIT))..."; \
+		git clone --depth=1 -b $(DXVK_COMMIT) \
+			https://github.com/doitsujin/dxvk.git \
+			$(UPSTREAM_DIR)/dxvk; \
+	fi
+
+	@# Clone vkd3d-proton
+	@if [ ! -d "$(UPSTREAM_DIR)/vkd3d-proton" ]; then \
+		echo "Cloning vkd3d-proton ($(VKD3D_COMMIT))..."; \
+		git clone --depth=1 -b $(VKD3D_COMMIT) \
+			https://github.com/HansKristian-Work/vkd3d-proton.git \
+			$(UPSTREAM_DIR)/vkd3d-proton; \
+	fi
+
+	@# Clone dxvk-nvapi
+	@if [ ! -d "$(UPSTREAM_DIR)/dxvk-nvapi" ]; then \
+		echo "Cloning dxvk-nvapi ($(DXVK_NVAPI_COMMIT))..."; \
+		git clone --depth=1 -b $(DXVK_NVAPI_COMMIT) \
+			https://github.com/jp7677/dxvk-nvapi.git \
+			$(UPSTREAM_DIR)/dxvk-nvapi; \
+	fi
+
+	@touch $@
+
+##
+## Apply patches
+##
+
+patch: fetch $(UPSTREAM_DIR)/.patched
+
+$(UPSTREAM_DIR)/.patched: $(UPSTREAM_DIR)/.fetched
+	@echo ">>> Applying Proton-NV patches..."
+
+	@# Apply NVIDIA patches
+	@echo "Applying NVIDIA Open Driver patches..."
+	@for patch in $(SRC)/patches/nvidia/*.patch; do \
+		if [ -f "$$patch" ]; then \
+			echo "  Applying: $$(basename $$patch)"; \
+			cd $(UPSTREAM_DIR)/proton && patch -Np1 < "$$patch" || true; \
+		fi; \
+	done
+
+	@# Apply Proton/Wine patches (GE-style)
+	@echo "Applying Proton patches..."
+	@for patch in $(SRC)/patches/proton/*.patch; do \
+		if [ -f "$$patch" ]; then \
+			echo "  Applying: $$(basename $$patch)"; \
+			cd $(UPSTREAM_DIR)/proton/wine && patch -Np1 < "$$patch" || true; \
+		fi; \
+	done
+
+	@# Apply wine hotfixes
+	@echo "Applying Wine hotfixes..."
+	@for patch in $(SRC)/patches/wine-hotfixes/*.patch; do \
+		if [ -f "$$patch" ]; then \
+			echo "  Applying: $$(basename $$patch)"; \
+			cd $(UPSTREAM_DIR)/proton/wine && patch -Np1 < "$$patch" || true; \
+		fi; \
+	done
+
+	@# Apply DXVK patches
+	@echo "Applying DXVK patches..."
+	@for patch in $(SRC)/patches/dxvk/*.patch; do \
+		if [ -f "$$patch" ]; then \
+			echo "  Applying: $$(basename $$patch)"; \
+			cd $(UPSTREAM_DIR)/dxvk && patch -Np1 < "$$patch" || true; \
+		fi; \
+	done
+
+	@# Apply vkd3d patches
+	@echo "Applying vkd3d-proton patches..."
+	@for patch in $(SRC)/patches/vkd3d/*.patch; do \
+		if [ -f "$$patch" ]; then \
+			echo "  Applying: $$(basename $$patch)"; \
+			cd $(UPSTREAM_DIR)/vkd3d-proton && patch -Np1 < "$$patch" || true; \
+		fi; \
+	done
+
+	@touch $@
+
+##
+## Build
+##
+
+build: patch $(BUILD_DIR)/.built
+
+$(BUILD_DIR)/.built: $(UPSTREAM_DIR)/.patched
+	@echo ">>> Building Proton-NV..."
+	@mkdir -p $(BUILD_DIR)
+
+	@# Build using Proton's build system
+	@echo "Building Proton (this may take a while)..."
+	@cd $(UPSTREAM_DIR)/proton && \
+		./configure.sh --build-name="$(BUILD_NAME)" && \
+		make -j$$(nproc) dist
+
+	@touch $@
+
+##
+## Create distribution
+##
+
+dist: build $(DIST_DIR)/.dist
+
+$(DIST_DIR)/.dist: $(BUILD_DIR)/.built
+	@echo ">>> Creating Proton-NV distribution..."
+	@mkdir -p $(DIST_DIR)/$(DIST_NAME)
+
+	@# Copy built Proton
+	@cp -r $(UPSTREAM_DIR)/proton/build/dist/* $(DIST_DIR)/$(DIST_NAME)/
+
+	@# Create toolmanifest
+	@echo '"version" "2"' > $(DIST_DIR)/$(DIST_NAME)/toolmanifest.vdf
+	@echo '"commandline" "/proton %verb%"' >> $(DIST_DIR)/$(DIST_NAME)/toolmanifest.vdf
+	@echo '"require_tool_appid" "1628350"' >> $(DIST_DIR)/$(DIST_NAME)/toolmanifest.vdf
+
+	@# Create compatibilitytool.vdf
+	@echo '"compatibilitytools"' > $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '{' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '  "compat_tools"' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '  {' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '    "$(DIST_NAME)"' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '    {' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '      "install_path" "."' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '      "display_name" "$(BUILD_NAME) $(FULL_VERSION)"' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '      "from_oslist" "windows"' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '      "to_oslist" "linux"' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '    }' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '  }' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+	@echo '}' >> $(DIST_DIR)/$(DIST_NAME)/compatibilitytool.vdf
+
+	@# Create version file
+	@echo "$(FULL_VERSION)" > $(DIST_DIR)/$(DIST_NAME)/version
+	@echo "NVIDIA Open $(NVIDIA_OPEN_DRIVER_MIN)+ optimized" >> $(DIST_DIR)/$(DIST_NAME)/version
+	@echo "Target: $(TARGET_GPU_ARCH)" >> $(DIST_DIR)/$(DIST_NAME)/version
+
+	@# Create Proton-NV specific config
+	@mkdir -p $(DIST_DIR)/$(DIST_NAME)/proton-nv
+	@cp $(SRC)/proton-nv.conf $(DIST_DIR)/$(DIST_NAME)/proton-nv/ 2>/dev/null || true
+
+	@touch $@
+	@echo "Distribution created: $(DIST_DIR)/$(DIST_NAME)"
+
+##
+## Install to Steam
+##
+
+install: dist
+	@echo ">>> Installing Proton-NV to Steam..."
+	@mkdir -p $(INSTALL_DIR)
+	@rm -rf $(INSTALL_DIR)/$(DIST_NAME)
+	@cp -r $(DIST_DIR)/$(DIST_NAME) $(INSTALL_DIR)/
+	@echo ""
+	@echo "========================================"
+	@echo "Proton-NV $(FULL_VERSION) installed!"
+	@echo "========================================"
+	@echo "Location: $(INSTALL_DIR)/$(DIST_NAME)"
+	@echo ""
+	@echo "Restart Steam to see it in the compatibility tools list."
+	@echo ""
+
+##
+## Clean
+##
+
+clean:
+	@echo ">>> Cleaning build artifacts..."
+	rm -rf $(BUILD_DIR) $(DIST_DIR)
+	rm -f $(UPSTREAM_DIR)/.patched $(UPSTREAM_DIR)/.built
+
+distclean: clean
+	@echo ">>> Removing all generated files..."
+	rm -rf $(UPSTREAM_DIR)
+	rm -f Makefile
+
+##
+## Development helpers
+##
+
+show-config:
+	@echo "Proton-NV Configuration"
+	@echo "======================="
+	@echo "SRCDIR:           $(SRC)"
+	@echo "BUILD_NAME:       $(BUILD_NAME)"
+	@echo "VERSION:          $(FULL_VERSION)"
+	@echo "PROTON_COMMIT:    $(PROTON_COMMIT)"
+	@echo "DXVK_COMMIT:      $(DXVK_COMMIT)"
+	@echo "VKD3D_COMMIT:     $(VKD3D_COMMIT)"
+	@echo "INSTALL_DIR:      $(INSTALL_DIR)"
+	@echo ""
+	@echo "NVIDIA Settings:"
+	@echo "  Min Driver:     $(NVIDIA_OPEN_DRIVER_MIN)"
+	@echo "  Target GPUs:    $(TARGET_GPU_ARCH)"
+	@echo ""
+	@echo "Compiler Flags:"
+	@echo "  CFLAGS:         $(COMMON_CFLAGS)"
+	@echo "  NVIDIA_DEFINES: $(NVIDIA_DEFINES)"

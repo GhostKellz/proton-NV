@@ -1,0 +1,206 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Proton-NV <proton-nv@nvidia-linux>
+Date: Sat, 29 Nov 2025 00:00:00 +0000
+Subject: [PATCH] proton: CachyOS and Linux-tkg BORE scheduler optimizations
+
+Tuning for CachyOS kernel (6.17+) and Linux-tkg with BORE scheduler (6.18+).
+These optimizations improve frame pacing and reduce input latency on
+systems running these gaming-optimized kernels.
+
+BORE (Burst-Oriented Response Enhancer) scheduler benefits:
+- Better handling of bursty game workloads
+- Improved latency for interactive tasks
+- Optimized CPU frequency scaling integration
+---
+diff --git a/proton b/proton
+index 1111111..2222222 100755
+--- a/proton
++++ b/proton
+@@ -1,5 +1,95 @@
+ #!/bin/bash
++#
++# Proton-NV - NVIDIA + CachyOS/tkg-bore optimized Proton
++#
+
++###############################################################################
++# CachyOS / Linux-tkg BORE Scheduler Detection and Tuning
++###############################################################################
++
++detect_scheduler() {
++    local current_scheduler=""
++
++    # Check for BORE scheduler (CachyOS / linux-tkg)
++    if [ -f /sys/kernel/debug/sched/features ]; then
++        if grep -q "BORE" /sys/kernel/debug/sched/features 2>/dev/null; then
++            current_scheduler="bore"
++        fi
++    fi
++
++    # Check kernel version for CachyOS/tkg detection
++    local kernel_version=$(uname -r)
++    if echo "$kernel_version" | grep -qE "(cachyos|tkg|bore)"; then
++        current_scheduler="bore"
++    fi
++
++    # Fallback: check for EEVDF (mainline 6.6+)
++    if [ -z "$current_scheduler" ]; then
++        if [ -f /sys/kernel/debug/sched/features ]; then
++            if grep -q "EEVDF" /sys/kernel/debug/sched/features 2>/dev/null; then
++                current_scheduler="eevdf"
++            fi
++        fi
++    fi
++
++    echo "$current_scheduler"
++}
++
++apply_bore_tuning() {
++    # BORE scheduler optimizations for gaming
++    # These require appropriate permissions (gamemode or root)
++
++    # Reduce scheduler latency for better responsiveness
++    if [ -w /proc/sys/kernel/sched_latency_ns ]; then
++        echo 4000000 > /proc/sys/kernel/sched_latency_ns 2>/dev/null
++    fi
++
++    # Minimum granularity for preemption
++    if [ -w /proc/sys/kernel/sched_min_granularity_ns ]; then
++        echo 500000 > /proc/sys/kernel/sched_min_granularity_ns 2>/dev/null
++    fi
++
++    # Wakeup granularity
++    if [ -w /proc/sys/kernel/sched_wakeup_granularity_ns ]; then
++        echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns 2>/dev/null
++    fi
++
++    # BORE-specific: burst tolerance
++    if [ -w /proc/sys/kernel/sched_bore_burst_time_ns ]; then
++        echo 2000000 > /proc/sys/kernel/sched_bore_burst_time_ns 2>/dev/null
++    fi
++}
++
++apply_cpu_governor_gaming() {
++    # Set performance governor for gaming
++    # Works with CachyOS amd-pstate or intel-pstate
++
++    for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
++        if [ -w "$cpu" ]; then
++            echo "performance" > "$cpu" 2>/dev/null
++        fi
++    done
++
++    # AMD P-State EPP (Energy Performance Preference)
++    for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
++        if [ -w "$epp" ]; then
++            echo "performance" > "$epp" 2>/dev/null
++        fi
++    done
++}
++
++# Apply tuning if BORE detected and PROTON_NV_SCHEDULER_TUNING enabled
++if [ "${PROTON_NV_SCHEDULER_TUNING:-1}" = "1" ]; then
++    scheduler=$(detect_scheduler)
++    if [ "$scheduler" = "bore" ]; then
++        apply_bore_tuning
++        export PROTON_NV_BORE_ENABLED=1
++    fi
++
++    if [ "${PROTON_NV_PERFORMANCE_GOVERNOR:-0}" = "1" ]; then
++        apply_cpu_governor_gaming
++    fi
++fi
+
+ # Original proton script continues below...
+--- /dev/null
++++ b/proton-nv-scheduler.conf
+@@ -0,0 +1,89 @@
++# Proton-NV Scheduler Configuration
++# Tuning for CachyOS (6.17+) and Linux-tkg BORE (6.18+)
++#
++# These settings optimize the kernel scheduler for gaming workloads
++# when using CachyOS or linux-tkg with BORE scheduler.
++
++##
++## Automatic Detection
++##
++
++# Enable automatic scheduler detection and tuning
++# Set to 0 to disable automatic tuning
++PROTON_NV_SCHEDULER_TUNING=1
++
++# Automatically set performance CPU governor when launching games
++# Requires appropriate permissions (gamemode, polkit, or root)
++PROTON_NV_PERFORMANCE_GOVERNOR=0
++
++##
++## BORE Scheduler Settings (linux-tkg / CachyOS)
++##
++
++# Scheduler latency target (nanoseconds)
++# Lower = more responsive, higher = better throughput
++# Default for gaming: 4000000 (4ms)
++# CachyOS default: 6000000 (6ms)
++PROTON_NV_SCHED_LATENCY_NS=4000000
++
++# Minimum preemption granularity (nanoseconds)
++# Lower = more preemption, better latency
++# Default for gaming: 500000 (0.5ms)
++PROTON_NV_SCHED_MIN_GRANULARITY_NS=500000
++
++# Wakeup granularity (nanoseconds)
++# Controls how quickly tasks are woken
++# Default for gaming: 500000 (0.5ms)
++PROTON_NV_SCHED_WAKEUP_GRANULARITY_NS=500000
++
++# BORE burst time allowance (nanoseconds)
++# Higher = more tolerance for burst workloads (game frames)
++# Default: 2000000 (2ms)
++PROTON_NV_BORE_BURST_TIME_NS=2000000
++
++##
++## Process Priority Settings
++##
++
++# Nice value for game process (-20 to 19, lower = higher priority)
++# Requires CAP_SYS_NICE or root
++# Default: -5 (slightly elevated priority)
++PROTON_NV_NICE=-5
++
++# IO scheduling class and priority
++# Classes: none, realtime, best-effort, idle
++# Priority: 0-7 (0 = highest for realtime/best-effort)
++PROTON_NV_IONICE_CLASS=best-effort
++PROTON_NV_IONICE_PRIORITY=0
++
++##
++## CPU Affinity (optional)
++##
++
++# CPU core affinity for game process
++# Format: comma-separated list or range (e.g., "0-7" or "0,2,4,6")
++# Leave empty for automatic scheduling
++# PROTON_NV_CPU_AFFINITY=
++
++# Prefer performance cores on hybrid CPUs (Intel 12th+, AMD with preferred cores)
++PROTON_NV_PREFER_PERFORMANCE_CORES=1
++
++##
++## Memory Settings
++##
++
++# Use transparent huge pages for game memory
++# Options: always, madvise, never
++PROTON_NV_THP=madvise
++
++# Memory locking (prevent swapping game memory)
++# Requires CAP_IPC_LOCK or appropriate limits
++PROTON_NV_MLOCK=0
++
++##
++## Kernel Feature Detection
++##
++
++# Kernel version thresholds
++# BORE scheduler available in linux-tkg 6.8+ and CachyOS 6.6+
++PROTON_NV_MIN_KERNEL_BORE="6.6"
++PROTON_NV_OPTIMAL_KERNEL="6.17"

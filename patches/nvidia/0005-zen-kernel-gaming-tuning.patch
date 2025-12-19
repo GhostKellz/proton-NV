@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Proton-NV <proton-nv@nvidia-linux>
+Date: Sat, 29 Nov 2025 00:00:00 +0000
+Subject: [PATCH] proton: Zen kernel gaming optimizations
+
+Support for Zen kernel (linux-zen) which is popular on Arch Linux.
+Zen kernel includes:
+- BORE scheduler (same as CachyOS/tkg)
+- MuQSS option on older versions
+- Gaming-focused defaults
+- Lower latency preemption
+
+This patch adds Zen-specific detection and tuning.
+---
+diff --git a/proton-nv-zen-kernel.sh b/proton-nv-zen-kernel.sh
+new file mode 100755
+index 0000000..1111111
+--- /dev/null
++++ b/proton-nv-zen-kernel.sh
+@@ -0,0 +1,156 @@
++#!/bin/bash
++#
++# Proton-NV Zen Kernel Support
++#
++# Zen kernel (linux-zen) is a popular gaming kernel for Arch Linux
++# It includes BORE scheduler and gaming-optimized defaults.
++#
++# Supported kernels:
++# - linux-zen (Arch official)
++# - linux-zen-git (AUR)
++# - linux-lts-zen (if exists)
++#
++
++PROTON_NV_VERSION="1.0"
++
++###############################################################################
++# Zen Kernel Detection
++###############################################################################
++
++detect_zen_kernel() {
++    local kver=$(uname -r)
++    local is_zen=0
++
++    # Check kernel version string for zen identifier
++    if echo "$kver" | grep -qi "zen"; then
++        is_zen=1
++    fi
++
++    # Check /proc/version for Zen build info
++    if [ -f /proc/version ]; then
++        if grep -qi "zen" /proc/version; then
++            is_zen=1
++        fi
++    fi
++
++    # Check for Zen-specific sysctl
++    if [ -f /proc/sys/kernel/sched_bore ]; then
++        # Zen uses BORE, presence indicates Zen or similar
++        is_zen=1
++    fi
++
++    echo "$is_zen"
++}
++
++get_zen_version() {
++    local kver=$(uname -r)
++
++    # Extract zen version if present (e.g., 6.17.1-zen1)
++    if echo "$kver" | grep -qoE "zen[0-9]+"; then
++        echo "$kver" | grep -oE "zen[0-9]+"
++    else
++        echo "zen"
++    fi
++}
++
++###############################################################################
++# Zen Kernel Scheduler Tuning
++###############################################################################
++
++# Zen kernel uses BORE by default, same tuning as CachyOS/tkg
++apply_zen_scheduler_tuning() {
++    local game_pid="$1"
++
++    echo "[Proton-NV] Applying Zen kernel gaming tuning..."
++
++    # Zen uses BORE - apply same optimizations
++    if [ -w /proc/sys/kernel ]; then
++
++        # Scheduler latency - Zen default is already lower than mainline
++        # Gaming: 3ms (zen default is ~4ms)
++        if [ -f /proc/sys/kernel/sched_latency_ns ]; then
++            echo 3000000 > /proc/sys/kernel/sched_latency_ns 2>/dev/null
++        fi
++
++        # Minimum granularity
++        if [ -f /proc/sys/kernel/sched_min_granularity_ns ]; then
++            echo 400000 > /proc/sys/kernel/sched_min_granularity_ns 2>/dev/null
++        fi
++
++        # Wakeup granularity
++        if [ -f /proc/sys/kernel/sched_wakeup_granularity_ns ]; then
++            echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns 2>/dev/null
++        fi
++
++        # BORE parameters (Zen includes BORE)
++        if [ -f /proc/sys/kernel/sched_burst_cache_lifetime ]; then
++            echo 60000000 > /proc/sys/kernel/sched_burst_cache_lifetime 2>/dev/null
++        fi
++
++        if [ -f /proc/sys/kernel/sched_burst_penalty_offset ]; then
++            echo 22 > /proc/sys/kernel/sched_burst_penalty_offset 2>/dev/null
++        fi
++
++        # Zen-specific: check for MuQSS (older Zen versions)
++        if [ -f /proc/sys/kernel/rr_interval ]; then
++            # MuQSS round-robin interval - lower for gaming
++            echo 2 > /proc/sys/kernel/rr_interval 2>/dev/null
++        fi
++
++    fi
++
++    # Per-process tuning
++    if [ -n "$game_pid" ] && [ -d "/proc/$game_pid" ]; then
++        renice -n -5 -p "$game_pid" 2>/dev/null
++        ionice -c 2 -n 0 -p "$game_pid" 2>/dev/null
++    fi
++}
++
++###############################################################################
++# Zen Kernel Feature Detection
++###############################################################################
++
++detect_zen_features() {
++    local features=""
++
++    # Check for BORE
++    if [ -f /proc/sys/kernel/sched_burst_cache_lifetime ]; then
++        features="$features BORE"
++    fi
++
++    # Check for MuQSS (older)
++    if [ -f /proc/sys/kernel/rr_interval ]; then
++        features="$features MuQSS"
++    fi
++
++    # Check for EEVDF base
++    if [ -f /sys/kernel/debug/sched/features ]; then
++        if grep -q "EEVDF" /sys/kernel/debug/sched/features 2>/dev/null; then
++            features="$features EEVDF"
++        fi
++    fi
++
++    # Zen typically has lower HZ (1000 vs 250)
++    if [ -f /proc/sys/kernel/sched_rr_timeslice_ms ]; then
++        features="$features HZ1000"
++    fi
++
++    echo "$features"
++}
++
++###############################################################################
++# Main
++###############################################################################
++
++if [ "$(detect_zen_kernel)" = "1" ]; then
++    export PROTON_NV_ZEN_KERNEL=1
++    export PROTON_NV_ZEN_VERSION=$(get_zen_version)
++    export PROTON_NV_ZEN_FEATURES=$(detect_zen_features)
++
++    # Apply tuning if enabled
++    if [ "${PROTON_NV_SCHEDULER_TUNING:-1}" = "1" ]; then
++        apply_zen_scheduler_tuning "$1"
++    fi
++fi
++
++# Export functions for use by main proton script
++export -f detect_zen_kernel apply_zen_scheduler_tuning
