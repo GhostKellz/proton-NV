@@ -1,0 +1,48 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 4/5] dxvk: Add nvvk markers in DxvkQueue submit
+
+Insert RENDERSUBMIT_START and RENDERSUBMIT_END markers around
+command buffer submission for accurate latency tracking.
+
+---
+ src/dxvk/dxvk_queue.cpp | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/src/dxvk/dxvk_queue.cpp b/src/dxvk/dxvk_queue.cpp
+index 3456789..cdefghi 100644
+--- a/src/dxvk/dxvk_queue.cpp
++++ b/src/dxvk/dxvk_queue.cpp
+@@ -1,5 +1,9 @@
+ #include "dxvk_queue.h"
+
++#if DXVK_NVVK_ENABLED
++#include "dxvk_nvvk.h"
++#endif
++
+ namespace dxvk {
+
+   DxvkSubmissionQueue::DxvkSubmissionQueue(DxvkDevice* device)
+@@ -93,6 +97,16 @@ namespace dxvk {
+       VkResult status = VK_SUCCESS;
+
+       if (entry.submit.cmdList != nullptr) {
++#if DXVK_NVVK_ENABLED
++        // Mark render submission start for Reflex latency tracking
++        auto* nvvk = m_device->nvvkLatency();
++        if (nvvk && nvvk->isSupported()) {
++          nvvk->beginRenderSubmit();
++        }
++#endif
++
+         status = entry.submit.cmdList->submit();
++
++#if DXVK_NVVK_ENABLED
++        // Mark render submission end
++        if (nvvk && nvvk->isSupported()) {
++          nvvk->endRenderSubmit();
++        }
++#endif
+       } else if (entry.present.presenter != nullptr) {
+         status = entry.present.presenter->presentImage(
+           entry.present.presentMode, entry.present.frameId);
+

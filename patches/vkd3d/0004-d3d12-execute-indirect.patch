@@ -1,0 +1,61 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 4/5] d3d12: Add nvvk markers for ExecuteIndirect
+
+Add out-of-band markers for ExecuteIndirect to capture GPU-driven
+rendering submissions separately from regular command list execution.
+
+---
+ libs/vkd3d/command.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index 5678901..6789012 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -2100,6 +2100,21 @@ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(
+     const struct vkd3d_vk_device_procs *vk_procs;
+     struct d3d12_command_signature *sig_impl;
+
++#if VKD3D_NVVK_ENABLED
++    struct vkd3d_nvvk_context *nvvk = NULL;
++
++    if (list->device && list->device->nvvk_context.enabled)
++    {
++        nvvk = &list->device->nvvk_context;
++        /* Use out-of-band markers for indirect execution.
++         * ExecuteIndirect represents GPU-driven rendering where the
++         * GPU determines what to draw. This is separate from regular
++         * CPU-initiated command lists and tracked independently.
++         */
++        nvvk_low_latency_set_marker(nvvk->ctx, NVVK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START);
++    }
++#endif
++
+     TRACE("iface %p, command_signature %p, max_command_count %u, arg_buffer %p, "
+             "arg_buffer_offset %#"PRIx64", count_buffer %p, count_buffer_offset %#"PRIx64".\n",
+             iface, command_signature, max_command_count, arg_buffer, arg_buffer_offset,
+@@ -2150,6 +2165,23 @@ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(
+         }
+     }
+
++#if VKD3D_NVVK_ENABLED
++    if (nvvk)
++    {
++        /* Mark end of indirect execution submission.
++         *
++         * For GPU-driven rendering (common in modern games like
++         * Fortnite, Elden Ring, Starfield), this captures timing
++         * of indirect draw/dispatch calls which may have significant
++         * GPU-side overhead.
++         *
++         * The out-of-band markers allow distinguishing GPU-driven
++         * work from regular CPU-submitted command lists in latency
++         * profiling tools.
++         */
++        nvvk_low_latency_set_marker(nvvk->ctx, NVVK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END);
++    }
++#endif
+ }
+
+ static void STDMETHODCALLTYPE d3d12_command_list_AtomicCopyBufferUINT(
+

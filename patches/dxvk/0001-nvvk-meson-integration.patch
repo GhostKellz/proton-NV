@@ -1,0 +1,33 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 1/5] meson: Add nvvk dependency for NVIDIA Reflex support
+
+Add optional nvvk library dependency to enable VK_NV_low_latency2
+integration for NVIDIA Reflex on Linux.
+
+---
+ meson.build | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/meson.build b/meson.build
+index 1234567..abcdefg 100644
+--- a/meson.build
++++ b/meson.build
+@@ -100,6 +100,18 @@ if platform == 'windows'
+   lib_vulkan  = dxvk_compiler.find_library('vulkan-1', dirs : lib_vulkan_path)
+ endif
+
++# Optional nvvk library for NVIDIA Reflex support
++nvvk_dep = dependency('nvvk', required : false)
++dxvk_nvvk_enabled = nvvk_dep.found()
++
++if dxvk_nvvk_enabled
++  message('nvvk found - NVIDIA Reflex support enabled')
++  add_project_arguments('-DDXVK_NVVK_ENABLED=1', language : ['c', 'cpp'])
++else
++  message('nvvk not found - NVIDIA Reflex support disabled')
++  add_project_arguments('-DDXVK_NVVK_ENABLED=0', language : ['c', 'cpp'])
++endif
++
+ subdir('src')
+
+ enable_tests = get_option('enable_tests')

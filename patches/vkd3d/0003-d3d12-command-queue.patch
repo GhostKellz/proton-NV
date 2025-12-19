@@ -1,0 +1,63 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 3/5] d3d12: Add nvvk markers in ExecuteCommandLists
+
+Insert RENDERSUBMIT_START/END markers around ID3D12CommandQueue
+ExecuteCommandLists for accurate latency tracking in DX12 games.
+
+---
+ libs/vkd3d/command.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index 4567890..5678901 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -5,6 +5,10 @@
+ #include "vkd3d_private.h"
+ #include "vkd3d_debug.h"
+
++#if VKD3D_NVVK_ENABLED
++#include "vkd3d_nvvk.h"
++#endif
++
+ /* ID3D12CommandQueue */
+
+ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(
+@@ -15,6 +19,18 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(
+     struct d3d12_command_queue *command_queue = impl_from_ID3D12CommandQueue(iface);
+     unsigned int i;
+
++#if VKD3D_NVVK_ENABLED
++    struct vkd3d_nvvk_context *nvvk = NULL;
++    struct d3d12_device *device = command_queue->device;
++
++    if (device && device->nvvk_context.enabled)
++    {
++        nvvk = &device->nvvk_context;
++        /* Mark start of GPU work submission */
++        vkd3d_nvvk_begin_render_submit(nvvk);
++    }
++#endif
++
+     TRACE("iface %p, command_list_count %u, command_lists %p.\n",
+             iface, command_list_count, command_lists);
+
+@@ -35,6 +51,18 @@ static HRESULT STDMETHODCALLTYPE d3d12_command_queue_ExecuteCommandLists(
+         d3d12_command_queue_submit(command_queue, cmd_list);
+     }
+
++#if VKD3D_NVVK_ENABLED
++    if (nvvk)
++    {
++        /* Mark end of GPU work submission
++         * This captures the time between application calling
++         * ExecuteCommandLists and driver accepting the work.
++         * Critical for identifying CPU-side submission bottlenecks.
++         */
++        vkd3d_nvvk_end_render_submit(nvvk);
++    }
++#endif
++
+     return S_OK;
+ }
+

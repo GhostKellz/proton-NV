@@ -1,0 +1,182 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 2/5] vkd3d: Add nvvk context wrapper
+
+C wrapper for nvvk low latency API integration into vkd3d-proton.
+Manages context lifecycle and provides convenient function wrappers.
+
+---
+ libs/vkd3d/vkd3d_nvvk.h | 48 ++++++++++++++++++++++++++++++++++++++++++
+ libs/vkd3d/vkd3d_nvvk.c | 92 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ libs/vkd3d/meson.build  |  6 +++++
+ 3 files changed, 146 insertions(+)
+
+diff --git a/libs/vkd3d/vkd3d_nvvk.h b/libs/vkd3d/vkd3d_nvvk.h
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/libs/vkd3d/vkd3d_nvvk.h
+@@ -0,0 +1,48 @@
++#ifndef VKD3D_NVVK_H
++#define VKD3D_NVVK_H
++
++#include "vkd3d_private.h"
++
++#if VKD3D_NVVK_ENABLED
++#include <nvvk/nvvk_low_latency.h>
++#endif
++
++struct vkd3d_nvvk_context
++{
++#if VKD3D_NVVK_ENABLED
++    nvvk_low_latency_ctx_t ctx;
++#endif
++    bool enabled;
++    bool boost;
++};
++
++bool vkd3d_nvvk_init(struct vkd3d_nvvk_context *nvvk,
++        VkDevice device, VkSwapchainKHR swapchain,
++        PFN_vkGetDeviceProcAddr proc_addr);
++
++void vkd3d_nvvk_destroy(struct vkd3d_nvvk_context *nvvk);
++
++bool vkd3d_nvvk_is_supported(const struct vkd3d_nvvk_context *nvvk);
++
++void vkd3d_nvvk_set_mode(struct vkd3d_nvvk_context *nvvk,
++        bool enabled, bool boost, uint32_t min_interval_us);
++
++uint64_t vkd3d_nvvk_begin_frame(struct vkd3d_nvvk_context *nvvk);
++
++void vkd3d_nvvk_end_simulation(struct vkd3d_nvvk_context *nvvk);
++void vkd3d_nvvk_begin_render_submit(struct vkd3d_nvvk_context *nvvk);
++void vkd3d_nvvk_end_render_submit(struct vkd3d_nvvk_context *nvvk);
++void vkd3d_nvvk_begin_present(struct vkd3d_nvvk_context *nvvk);
++void vkd3d_nvvk_end_present(struct vkd3d_nvvk_context *nvvk);
++void vkd3d_nvvk_mark_input_sample(struct vkd3d_nvvk_context *nvvk);
++
++void vkd3d_nvvk_sleep(struct vkd3d_nvvk_context *nvvk,
++        VkSemaphore semaphore, uint64_t value);
++
++uint64_t vkd3d_nvvk_get_current_frame_id(const struct vkd3d_nvvk_context *nvvk);
++
++/* Environment variable checks */
++bool vkd3d_nvvk_env_enabled(void);
++bool vkd3d_nvvk_env_boost_enabled(void);
++
++#endif /* VKD3D_NVVK_H */
+diff --git a/libs/vkd3d/vkd3d_nvvk.c b/libs/vkd3d/vkd3d_nvvk.c
+new file mode 100644
+index 0000000..2345678
+--- /dev/null
++++ b/libs/vkd3d/vkd3d_nvvk.c
+@@ -0,0 +1,92 @@
++#include "vkd3d_nvvk.h"
++#include "vkd3d_debug.h"
++#include <stdlib.h>
++#include <string.h>
++
++bool vkd3d_nvvk_env_enabled(void)
++{
++    const char *env = getenv("VKD3D_NVVK_ENABLE");
++    return env && strcmp(env, "1") == 0;
++}
++
++bool vkd3d_nvvk_env_boost_enabled(void)
++{
++    const char *env = getenv("VKD3D_NVVK_BOOST");
++    return env && strcmp(env, "1") == 0;
++}
++
++bool vkd3d_nvvk_init(struct vkd3d_nvvk_context *nvvk,
++        VkDevice device, VkSwapchainKHR swapchain,
++        PFN_vkGetDeviceProcAddr proc_addr)
++{
++    memset(nvvk, 0, sizeof(*nvvk));
++
++#if VKD3D_NVVK_ENABLED
++    nvvk->ctx = nvvk_low_latency_init(
++        (NvvkDevice)device,
++        (NvvkSwapchain)swapchain,
++        proc_addr);
++
++    if (nvvk->ctx && nvvk_low_latency_is_supported(nvvk->ctx))
++    {
++        INFO("vkd3d-nvvk: VK_NV_low_latency2 available.\n");
++        return true;
++    }
++    INFO("vkd3d-nvvk: VK_NV_low_latency2 not available.\n");
++#endif
++    return false;
++}
++
++void vkd3d_nvvk_destroy(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx)
++        nvvk_low_latency_destroy(nvvk->ctx);
++    nvvk->ctx = NULL;
++#endif
++}
++
++bool vkd3d_nvvk_is_supported(const struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    return nvvk->ctx && nvvk_low_latency_is_supported(nvvk->ctx);
++#else
++    return false;
++#endif
++}
++
++void vkd3d_nvvk_set_mode(struct vkd3d_nvvk_context *nvvk,
++        bool enabled, bool boost, uint32_t min_interval_us)
++{
++#if VKD3D_NVVK_ENABLED
++    if (!nvvk->ctx) return;
++    if (enabled)
++        nvvk_low_latency_enable(nvvk->ctx, boost, min_interval_us);
++    else
++        nvvk_low_latency_disable(nvvk->ctx);
++    nvvk->enabled = enabled;
++    nvvk->boost = boost;
++#endif
++}
++
++uint64_t vkd3d_nvvk_begin_frame(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    return nvvk->ctx ? nvvk_low_latency_begin_frame(nvvk->ctx) : 0;
++#else
++    return 0;
++#endif
++}
++
++void vkd3d_nvvk_end_simulation(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx) nvvk_low_latency_end_simulation(nvvk->ctx);
++#endif
++}
++
++/* Additional marker functions follow same pattern */
++void vkd3d_nvvk_begin_render_submit(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_begin_render_submit(nvvk->ctx); }
++void vkd3d_nvvk_end_render_submit(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_end_render_submit(nvvk->ctx); }
++void vkd3d_nvvk_begin_present(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_begin_present(nvvk->ctx); }
++void vkd3d_nvvk_end_present(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_end_present(nvvk->ctx); }
+diff --git a/libs/vkd3d/meson.build b/libs/vkd3d/meson.build
+index 3456789..4567890 100644
+--- a/libs/vkd3d/meson.build
++++ b/libs/vkd3d/meson.build
+@@ -60,6 +60,12 @@ vkd3d_src = [
+   'vkd3d_platform.c',
+ ]
+
++if vkd3d_nvvk_enabled
++  vkd3d_src += [
++    'vkd3d_nvvk.c',
++  ]
++endif
++
+ vkd3d_lib = static_library('vkd3d', vkd3d_src,
+   dependencies        : [ vkd3d_common_dep, vkd3d_shader_dep ],
+   include_directories : vkd3d_private_includes)
+

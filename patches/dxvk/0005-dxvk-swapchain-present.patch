@@ -1,0 +1,117 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 5/5] dxvk: Add nvvk present markers and sleep
+
+Add PRESENT_START/END markers around vkQueuePresentKHR.
+Implement Reflex sleep for optimal frame pacing.
+
+---
+ src/dxvk/dxvk_swapchain.h   |  8 ++++++++
+ src/dxvk/dxvk_swapchain.cpp | 45 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/src/dxvk/dxvk_swapchain.h b/src/dxvk/dxvk_swapchain.h
+index 4567890..defghij 100644
+--- a/src/dxvk/dxvk_swapchain.h
++++ b/src/dxvk/dxvk_swapchain.h
+@@ -10,6 +10,10 @@
+
+ #include "../wsi/wsi_window.h"
+
++#if DXVK_NVVK_ENABLED
++#include "dxvk_nvvk.h"
++#endif
++
+ namespace dxvk {
+
+   class DxvkDevice;
+@@ -120,6 +124,10 @@ namespace dxvk {
+     VkSemaphore           m_acquireSemaphore = VK_NULL_HANDLE;
+     VkSemaphore           m_presentSemaphore = VK_NULL_HANDLE;
+
++#if DXVK_NVVK_ENABLED
++    VkSemaphore           m_reflexSleepSemaphore = VK_NULL_HANDLE;
++    uint64_t              m_reflexSleepValue = 0;
++#endif
+
+     VkResult getNextImage(VkImage& image);
+
+diff --git a/src/dxvk/dxvk_swapchain.cpp b/src/dxvk/dxvk_swapchain.cpp
+index 5678901..efghijk 100644
+--- a/src/dxvk/dxvk_swapchain.cpp
++++ b/src/dxvk/dxvk_swapchain.cpp
+@@ -23,6 +23,21 @@ namespace dxvk {
+     m_acquireSemaphore = createSemaphore();
+     m_presentSemaphore = createSemaphore();
+
++#if DXVK_NVVK_ENABLED
++    // Create timeline semaphore for Reflex sleep
++    if (m_device->nvvkLatency() && m_device->nvvkLatency()->isSupported()) {
++      VkSemaphoreTypeCreateInfo timelineInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
++      timelineInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
++      timelineInfo.initialValue = 0;
++
++      VkSemaphoreCreateInfo semaphoreInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
++      semaphoreInfo.pNext = &timelineInfo;
++
++      vk->vkCreateSemaphore(vk->device(), &semaphoreInfo, nullptr, &m_reflexSleepSemaphore);
++      m_device->initNvvkLatency(m_swapchain);
++    }
++#endif
++
+     recreateSwapchain();
+   }
+
+@@ -31,6 +46,11 @@ namespace dxvk {
+
+     vk->vkDestroySemaphore(vk->device(), m_acquireSemaphore, nullptr);
+     vk->vkDestroySemaphore(vk->device(), m_presentSemaphore, nullptr);
++
++#if DXVK_NVVK_ENABLED
++    if (m_reflexSleepSemaphore)
++      vk->vkDestroySemaphore(vk->device(), m_reflexSleepSemaphore, nullptr);
++#endif
+   }
+
+
+@@ -89,6 +109,17 @@ namespace dxvk {
+
+
+   VkResult DxvkSwapchain::present(VkQueue queue) {
++#if DXVK_NVVK_ENABLED
++    auto* nvvk = m_device->nvvkLatency();
++
++    // Begin frame timing for next frame
++    if (nvvk && nvvk->isSupported()) {
++      nvvk->beginFrame();
++
++      // Mark present start
++      nvvk->beginPresent();
++    }
++#endif
++
+     VkPresentInfoKHR presentInfo = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+     presentInfo.waitSemaphoreCount = 1;
+     presentInfo.pWaitSemaphores = &m_presentSemaphore;
+@@ -98,6 +129,20 @@ namespace dxvk {
+
+     VkResult status = m_vkd->vkQueuePresentKHR(queue, &presentInfo);
+
++#if DXVK_NVVK_ENABLED
++    if (nvvk && nvvk->isSupported()) {
++      // Mark present end
++      nvvk->endPresent();
++
++      // Reflex sleep - wait until optimal time for next frame
++      // This reduces input latency by minimizing time between input sampling
++      // and the next frame's display
++      if (m_reflexSleepSemaphore) {
++        m_reflexSleepValue++;
++        nvvk->sleep(m_reflexSleepSemaphore, m_reflexSleepValue);
++      }
++    }
++#endif
++
+     m_presentCount++;
+     return status;
+   }
+

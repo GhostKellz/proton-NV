@@ -1,0 +1,116 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 5/5] dxgi: Add nvvk present markers and sleep
+
+Add PRESENT_START/END markers around swapchain present.
+Implement Reflex sleep for optimal frame pacing in DX12 games.
+
+---
+ libs/vkd3d/swapchain.c | 56 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ libs/vkd3d/vkd3d_private.h | 8 ++++++++
+ 2 files changed, 64 insertions(+)
+
+diff --git a/libs/vkd3d/swapchain.c b/libs/vkd3d/swapchain.c
+index 6789012..7890123 100644
+--- a/libs/vkd3d/swapchain.c
++++ b/libs/vkd3d/swapchain.c
+@@ -4,6 +4,10 @@
+ #include "vkd3d_private.h"
+ #include "vkd3d_debug.h"
+
++#if VKD3D_NVVK_ENABLED
++#include "vkd3d_nvvk.h"
++#endif
++
+ static HRESULT STDMETHODCALLTYPE dxgi_vk_swap_chain_Present(
+         IDXGIVkSwapChain *iface, UINT sync_interval, UINT flags)
+ {
+@@ -11,6 +15,30 @@ static HRESULT STDMETHODCALLTYPE dxgi_vk_swap_chain_Present(
+     VkResult vr;
+     HRESULT hr;
+
++#if VKD3D_NVVK_ENABLED
++    struct vkd3d_nvvk_context *nvvk = NULL;
++    struct d3d12_device *device = swapchain->device;
++
++    if (device && device->nvvk_context.enabled)
++    {
++        nvvk = &device->nvvk_context;
++
++        /* Begin new frame timing.
++         * This increments the present ID counter and sets
++         * the SIMULATION_START marker, establishing the
++         * correlation between frame number and timing data.
++         */
++        vkd3d_nvvk_begin_frame(nvvk);
++
++        /* Mark present start.
++         * Captures the time between application calling Present
++         * and the actual vkQueuePresentKHR submission.
++         */
++        vkd3d_nvvk_begin_present(nvvk);
++    }
++#endif
++
+     TRACE("iface %p, sync_interval %u, flags %#x.\n", iface, sync_interval, flags);
+
+     if (flags & DXGI_PRESENT_TEST)
+@@ -25,6 +53,34 @@ static HRESULT STDMETHODCALLTYPE dxgi_vk_swap_chain_Present(
+     if (FAILED(hr = dxgi_vk_swap_chain_queue_present(swapchain, sync_interval)))
+         return hr;
+
++#if VKD3D_NVVK_ENABLED
++    if (nvvk)
++    {
++        /* Mark present end.
++         * This completes the present timing window.
++         */
++        vkd3d_nvvk_end_present(nvvk);
++
++        /* Reflex sleep - optimal frame pacing.
++         *
++         * The driver analyzes the complete frame timing data
++         * (simulation, render submit, present) and calculates
++         * the optimal time to start the next frame's work.
++         *
++         * By sleeping here, we minimize the time between:
++         * - Input sampling (beginning of next frame)
++         * - Display of that input's result
++         *
++         * This is the core mechanism that reduces input latency
++         * from potentially multiple frames to under one frame.
++         */
++        if (swapchain->reflex_sleep_semaphore)
++            vkd3d_nvvk_sleep(nvvk, swapchain->reflex_sleep_semaphore,
++                    ++swapchain->reflex_sleep_value);
++    }
++#endif
++
+     return S_OK;
+ }
+
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 7890123..8901234 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -45,6 +45,10 @@
+ #include "vkd3d_file_utils.h"
+ #include "vkd3d_string.h"
+
++#if VKD3D_NVVK_ENABLED
++#include "vkd3d_nvvk.h"
++#endif
++
+ #define VKD3D_DESCRIPTOR_MAGIC_HAS_VIEW 0x01000000u
+ #define VKD3D_DESCRIPTOR_MAGIC_HAS_SAMPLER 0x02000000u
+
+@@ -2100,6 +2104,10 @@ struct d3d12_device
+     struct vkd3d_cached_command_allocator cached_command_allocators[VKD3D_CACHED_COMMAND_ALLOCATOR_COUNT];
+     size_t cached_command_allocator_count;
+
++#if VKD3D_NVVK_ENABLED
++    struct vkd3d_nvvk_context nvvk_context;
++#endif
++
+     LONG refcount;
+ };
+

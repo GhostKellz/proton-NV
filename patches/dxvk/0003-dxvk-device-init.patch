@@ -1,0 +1,104 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 3/5] dxvk: Initialize nvvk in DxvkDevice
+
+Initialize nvvk low latency context when creating a device on NVIDIA GPUs.
+Context is stored in DxvkDevice and available to swapchain/queue.
+
+---
+ src/dxvk/dxvk_device.h   | 18 ++++++++++++++++++
+ src/dxvk/dxvk_device.cpp | 32 ++++++++++++++++++++++++++++++++
+ 2 files changed, 50 insertions(+)
+
+diff --git a/src/dxvk/dxvk_device.h b/src/dxvk/dxvk_device.h
+index 1234567..abcdefg 100644
+--- a/src/dxvk/dxvk_device.h
++++ b/src/dxvk/dxvk_device.h
+@@ -12,6 +12,10 @@
+ #include "dxvk_recycler.h"
+ #include "dxvk_stats.h"
+
++#if DXVK_NVVK_ENABLED
++#include "dxvk_nvvk.h"
++#endif
++
+ namespace dxvk {
+
+   class DxvkInstance;
+@@ -250,6 +254,16 @@ namespace dxvk {
+      */
+     DxvkDevicePerfHints perfHints() const;
+
++#if DXVK_NVVK_ENABLED
++    /**
++     * \brief Gets nvvk latency context
++     *
++     * Returns the nvvk low latency context if available.
++     * \returns Pointer to nvvk context or nullptr
++     */
++    DxvkNvvkLatency* nvvkLatency();
++#endif
++
+   private:
+
+     Rc<DxvkAdapter>             m_adapter;
+@@ -272,6 +286,10 @@ namespace dxvk {
+     std::atomic<uint32_t>       m_resourceSequenceId = { 1u };
+     std::atomic<uint32_t>       m_statSequenceId     = { 1u };
+
++#if DXVK_NVVK_ENABLED
++    std::unique_ptr<DxvkNvvkLatency> m_nvvkLatency;
++#endif
++
+     DxvkDeviceQueue getQueue(
+             uint32_t                family,
+             uint32_t                index) const;
+diff --git a/src/dxvk/dxvk_device.cpp b/src/dxvk/dxvk_device.cpp
+index 2345678..bcdefgh 100644
+--- a/src/dxvk/dxvk_device.cpp
++++ b/src/dxvk/dxvk_device.cpp
+@@ -45,6 +45,22 @@ namespace dxvk {
+     m_objects.sampler().setContextId(0);
+
+     m_unboundResources.init(this);
++
++#if DXVK_NVVK_ENABLED
++    // Initialize nvvk on NVIDIA GPUs if enabled
++    if (m_adapter->deviceProperties().vendorID == 0x10de && dxvkNvvkEnabled()) {
++      Logger::info("DxvkDevice: NVIDIA GPU detected, nvvk enabled");
++    }
++#endif
++  }
++
++#if DXVK_NVVK_ENABLED
++  void DxvkDevice::initNvvkLatency(VkSwapchainKHR swapchain) {
++    if (m_adapter->deviceProperties().vendorID != 0x10de || !dxvkNvvkEnabled())
++      return;
++
++    m_nvvkLatency = std::make_unique<DxvkNvvkLatency>(
++      m_vkd->device(), swapchain, vkGetDeviceProcAddr);
++
++    if (m_nvvkLatency->isSupported()) {
++      bool boost = dxvkNvvkBoostEnabled();
++      m_nvvkLatency->setMode(true, boost, 0);
++      Logger::info(str::format("DxvkDevice: nvvk low latency enabled (boost=", boost, ")"));
++    }
+   }
++#endif
+
+
+   DxvkDevice::~DxvkDevice() {
+@@ -73,6 +89,14 @@ namespace dxvk {
+   }
+
+
++#if DXVK_NVVK_ENABLED
++  DxvkNvvkLatency* DxvkDevice::nvvkLatency() {
++    return m_nvvkLatency.get();
++  }
++#endif
++
++
+   VkPipelineStageFlags DxvkDevice::getShaderPipelineStages() const {
+     VkPipelineStageFlags stages =
+       VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+

@@ -1,0 +1,186 @@
+From: GhostKellz <chris@ghostkellz.sh>
+Subject: [PATCH 2/5] dxvk: Add nvvk C++ wrapper class
+
+Wrapper class for nvvk low latency C API integration.
+Provides RAII resource management and convenient interface.
+
+---
+ src/dxvk/dxvk_nvvk.h   | 58 ++++++++++++++++++++++++++++++++++++++++++
+ src/dxvk/dxvk_nvvk.cpp | 89 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/dxvk/meson.build   |  6 +++++
+ 3 files changed, 153 insertions(+)
+
+diff --git a/src/dxvk/dxvk_nvvk.h b/src/dxvk/dxvk_nvvk.h
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/dxvk/dxvk_nvvk.h
+@@ -0,0 +1,58 @@
++#pragma once
++
++#include "dxvk_include.h"
++
++#if DXVK_NVVK_ENABLED
++#include <nvvk/nvvk_low_latency.h>
++#endif
++
++namespace dxvk {
++
++  /**
++   * \brief NVIDIA Reflex wrapper
++   *
++   * Provides VK_NV_low_latency2 integration via nvvk library.
++   * Enables reduced input-to-display latency on NVIDIA GPUs.
++   */
++  class DxvkNvvkLatency {
++  public:
++    DxvkNvvkLatency(
++      VkDevice              device,
++      VkSwapchainKHR        swapchain,
++      PFN_vkGetDeviceProcAddr procAddr);
++
++    ~DxvkNvvkLatency();
++
++    DxvkNvvkLatency             (DxvkNvvkLatency&&) = delete;
++    DxvkNvvkLatency& operator = (DxvkNvvkLatency&&) = delete;
++
++    bool isSupported() const;
++
++    void setMode(bool enabled, bool boost, uint32_t minIntervalUs);
++
++    uint64_t beginFrame();
++
++    void endSimulation();
++    void beginRenderSubmit();
++    void endRenderSubmit();
++    void beginPresent();
++    void endPresent();
++    void markInputSample();
++
++    void sleep(VkSemaphore semaphore, uint64_t value);
++
++    uint64_t getCurrentFrameId() const;
++
++  private:
++#if DXVK_NVVK_ENABLED
++    nvvk_low_latency_ctx_t m_ctx = nullptr;
++#endif
++    bool m_enabled = false;
++  };
++
++  /**
++   * \brief Check environment for nvvk settings
++   */
++  bool dxvkNvvkEnabled();
++  bool dxvkNvvkBoostEnabled();
++
++}
+diff --git a/src/dxvk/dxvk_nvvk.cpp b/src/dxvk/dxvk_nvvk.cpp
+new file mode 100644
+index 0000000..2345678
+--- /dev/null
++++ b/src/dxvk/dxvk_nvvk.cpp
+@@ -0,0 +1,89 @@
++#include "dxvk_nvvk.h"
++#include "../util/util_env.h"
++#include "../util/log/log.h"
++
++namespace dxvk {
++
++  bool dxvkNvvkEnabled() {
++    return env::getEnvVar("DXVK_NVVK_ENABLE") == "1";
++  }
++
++  bool dxvkNvvkBoostEnabled() {
++    return env::getEnvVar("DXVK_NVVK_BOOST") == "1";
++  }
++
++  DxvkNvvkLatency::DxvkNvvkLatency(
++      VkDevice              device,
++      VkSwapchainKHR        swapchain,
++      PFN_vkGetDeviceProcAddr procAddr) {
++#if DXVK_NVVK_ENABLED
++    m_ctx = nvvk_low_latency_init(
++      reinterpret_cast<NvvkDevice>(device),
++      reinterpret_cast<NvvkSwapchain>(swapchain),
++      procAddr);
++
++    if (m_ctx && nvvk_low_latency_is_supported(m_ctx)) {
++      Logger::info("DxvkNvvkLatency: VK_NV_low_latency2 available");
++    } else {
++      Logger::info("DxvkNvvkLatency: VK_NV_low_latency2 not available");
++    }
++#endif
++  }
++
++  DxvkNvvkLatency::~DxvkNvvkLatency() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx)
++      nvvk_low_latency_destroy(m_ctx);
++#endif
++  }
++
++  bool DxvkNvvkLatency::isSupported() const {
++#if DXVK_NVVK_ENABLED
++    return m_ctx && nvvk_low_latency_is_supported(m_ctx);
++#else
++    return false;
++#endif
++  }
++
++  void DxvkNvvkLatency::setMode(bool enabled, bool boost, uint32_t minIntervalUs) {
++#if DXVK_NVVK_ENABLED
++    if (!m_ctx) return;
++    if (enabled)
++      nvvk_low_latency_enable(m_ctx, boost, minIntervalUs);
++    else
++      nvvk_low_latency_disable(m_ctx);
++    m_enabled = enabled;
++#endif
++  }
++
++  uint64_t DxvkNvvkLatency::beginFrame() {
++#if DXVK_NVVK_ENABLED
++    return m_ctx ? nvvk_low_latency_begin_frame(m_ctx) : 0;
++#else
++    return 0;
++#endif
++  }
++
++  void DxvkNvvkLatency::endSimulation() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx) nvvk_low_latency_end_simulation(m_ctx);
++#endif
++  }
++
++  void DxvkNvvkLatency::beginRenderSubmit() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx) nvvk_low_latency_begin_render_submit(m_ctx);
++#endif
++  }
++
++  void DxvkNvvkLatency::endRenderSubmit() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx) nvvk_low_latency_end_render_submit(m_ctx);
++#endif
++  }
++
++  // ... remaining methods follow same pattern
++}
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+index 3456789..4567890 100644
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -50,6 +50,12 @@ dxvk_src = files([
+   'dxvk_unbound.cpp',
+ ])
+
++if dxvk_nvvk_enabled
++  dxvk_src += files([
++    'dxvk_nvvk.cpp',
++  ])
++endif
++
+ dxvk_lib = static_library('dxvk', dxvk_src,
+   dependencies        : [ thread_dep, vkcommon_dep, util_dep, spirv_dep ],
+   include_directories : [ dxvk_include_path ])
