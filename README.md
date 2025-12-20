@@ -3,7 +3,7 @@
 **NVIDIA-Optimized Proton for Linux Gaming**
 
 Proton-NV is a custom Proton build specifically tuned for NVIDIA GPUs on Linux, targeting:
-- **NVIDIA Open Kernel Module 590+** (590.48.01 recommended)
+- **NVIDIA Open Kernel Module 590+** with GSP=1 (590.xx recommended)
 - **RTX 40/50 series GPUs**
 - **CachyOS / Linux-tkg kernels with BORE+EEVDF scheduler**
 - **Kernel 6.17/6.18+ gaming optimizations**
