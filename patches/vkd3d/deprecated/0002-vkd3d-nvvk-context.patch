@@ -5,10 +5,10 @@ C wrapper for nvvk low latency API integration into vkd3d-proton.
 Manages context lifecycle and provides convenient function wrappers.
 
 ---
- libs/vkd3d/vkd3d_nvvk.h | 48 ++++++++++++++++++++++++++++++++++++++++++
- libs/vkd3d/vkd3d_nvvk.c | 92 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- libs/vkd3d/meson.build  |  6 +++++
- 3 files changed, 146 insertions(+)
+ libs/vkd3d/vkd3d_nvvk.h |  48 ++++++++++++++++++++++++++
+ libs/vkd3d/vkd3d_nvvk.c | 139 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ libs/vkd3d/meson.build  |   6 ++++
+ 3 files changed, 193 insertions(+)
 
 diff --git a/libs/vkd3d/vkd3d_nvvk.h b/libs/vkd3d/vkd3d_nvvk.h
 new file mode 100644
@@ -157,11 +157,58 @@ index 0000000..2345678
 +#endif
 +}
 +
-+/* Additional marker functions follow same pattern */
-+void vkd3d_nvvk_begin_render_submit(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_begin_render_submit(nvvk->ctx); }
-+void vkd3d_nvvk_end_render_submit(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_end_render_submit(nvvk->ctx); }
-+void vkd3d_nvvk_begin_present(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_begin_present(nvvk->ctx); }
-+void vkd3d_nvvk_end_present(struct vkd3d_nvvk_context *nvvk) { if (nvvk->ctx) nvvk_low_latency_end_present(nvvk->ctx); }
++void vkd3d_nvvk_begin_render_submit(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx) nvvk_low_latency_begin_render_submit(nvvk->ctx);
++#endif
++}
++
++void vkd3d_nvvk_end_render_submit(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx) nvvk_low_latency_end_render_submit(nvvk->ctx);
++#endif
++}
++
++void vkd3d_nvvk_begin_present(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx) nvvk_low_latency_begin_present(nvvk->ctx);
++#endif
++}
++
++void vkd3d_nvvk_end_present(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx) nvvk_low_latency_end_present(nvvk->ctx);
++#endif
++}
++
++void vkd3d_nvvk_mark_input_sample(struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx) nvvk_low_latency_mark_input_sample(nvvk->ctx);
++#endif
++}
++
++void vkd3d_nvvk_sleep(struct vkd3d_nvvk_context *nvvk,
++        VkSemaphore semaphore, uint64_t value)
++{
++#if VKD3D_NVVK_ENABLED
++    if (nvvk->ctx && nvvk->enabled)
++        nvvk_low_latency_sleep(nvvk->ctx, (NvvkSemaphore)semaphore, value);
++#endif
++}
++
++uint64_t vkd3d_nvvk_get_current_frame_id(const struct vkd3d_nvvk_context *nvvk)
++{
++#if VKD3D_NVVK_ENABLED
++    return nvvk->ctx ? nvvk_low_latency_get_frame_id(nvvk->ctx) : 0;
++#else
++    return 0;
++#endif
++}
 diff --git a/libs/vkd3d/meson.build b/libs/vkd3d/meson.build
 index 3456789..4567890 100644
 --- a/libs/vkd3d/meson.build

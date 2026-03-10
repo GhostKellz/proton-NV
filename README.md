@@ -1,19 +1,32 @@
 # Proton-NV
 
+> **⚠️ Experimental Project** - This project is under active development and not fully tested. Use at your own risk.
+
 **NVIDIA-Optimized Proton for Linux Gaming**
 
 Proton-NV is a custom Proton build specifically tuned for NVIDIA GPUs on Linux, targeting:
-- **NVIDIA Open Kernel Module 590+** with GSP=1 (590.xx recommended)
+- **NVIDIA Open Kernel Module 595+** with GSP=1 (595.45.04+ recommended)
+- **vkd3d-proton 3.0** with NVIDIA-specific optimizations + VK_EXT_descriptor_heap
 - **RTX 40/50 series GPUs**
 - **CachyOS / Linux-tkg kernels with BORE+EEVDF scheduler**
-- **Kernel 6.17/6.18+ gaming optimizations**
+- **Kernel 6.19+ / Linux 7.x gaming optimizations**
 
-## Driver 590+ Benefits
+## Driver 595+ Benefits
 
-Proton-NV 1.1 is optimized for NVIDIA 590.48.01+ which includes critical fixes:
+Proton-NV 1.1 is optimized for NVIDIA 595.45.04+ which includes critical fixes:
+- **VK_EXT_descriptor_heap** - Massive DX12 performance improvement via native descriptor heap support
 - **Vulkan swapchain recreation performance** - Smoother alt-tab, resolution changes, and window resizing
-- **Better VK_NV_low_latency2 behavior** - More reliable Reflex in DXVK games
+- **Better VK_NV_low_latency2 behavior** - More reliable Reflex in DXVK/vkd3d-proton games
 - **Wayland 1.20+ improvements** - Full functionality on KDE Plasma, GNOME, Hyprland
+- **Linux 7.x kernel preparation** - Forward compatibility with upcoming kernel releases
+
+## vkd3d-proton 3.0 Integration
+
+Proton-NV targets vkd3d-proton 3.0 with NVIDIA-specific tuning:
+- **force_static_cbv** - NVIDIA speed hack for constant buffer views (enabled by default)
+- **VK_NV_low_latency2** - Native upstream Reflex support (NVIDIA contributed)
+- **DXBC shader backend rewrite** - Better game compatibility
+- **VK_EXT_descriptor_heap** - Enabled by default with NVIDIA 595+ (massive DX12 perf boost)
 
 ## Features
 
@@ -38,9 +51,9 @@ Proton-NV 1.1 is optimized for NVIDIA 590.48.01+ which includes critical fixes:
 ## Requirements
 
 - **GPU**: NVIDIA RTX 40 or 50 series (30 series may work)
-- **Driver**: NVIDIA Open Kernel Module 590+ recommended (590.48.01+)
-  - Minimum: 580+ (basic functionality)
-- **Kernel**: CachyOS 6.6+, Linux-tkg 6.8+, or mainline 6.17+
+- **Driver**: NVIDIA Open Kernel Module 595+ (595.45.04+)
+  - Minimum: 590+ (without descriptor heap)
+- **Kernel**: CachyOS 6.19+, Linux-tkg 6.19+, or mainline 6.19+ (Linux 7.x when available)
 - **Steam**: For automatic Proton integration
 
 ## Installation
@@ -125,13 +138,25 @@ DXVK_ASYNC=1 PROTON_ENABLE_REFLEX=1 %command%
 
 ## Kernel Compatibility
 
-| Kernel | Scheduler | Proton-NV Support |
-|--------|-----------|-------------------|
-| CachyOS 6.6+ | BORE+EEVDF | Full |
-| Linux-tkg 6.8+ | BORE | Full |
-| Mainline 6.6+ | EEVDF | Good |
-| Mainline 6.17/6.18 | EEVDF | Optimal |
-| Older (<6.6) | CFS | Basic |
+| Kernel | Scheduler | Proton-NV Support | Notes |
+|--------|-----------|-------------------|-------|
+| CachyOS 6.19+ | BORE+EEVDF | Full | Recommended |
+| Linux-tkg 6.19+ | BORE | Full | Recommended |
+| Linux-zen 6.19+ | EEVDF | Full | GCC required for NVIDIA build |
+| Mainline 6.19+ | EEVDF | Full | |
+| **Linux 7.x** | EEVDF | Pending | Awaiting NVIDIA driver update |
+| CachyOS-lto | BORE+EEVDF | Partial | Clang/LTO build issues with NVIDIA |
+| Older (<6.19) | CFS/EEVDF | Basic | Missing mm/folio API |
+
+### Linux 7.x Notes
+
+Linux 7.0 (expected late 2026) will introduce further mm/folio API changes. The NVIDIA 595 driver includes 6.19 compatibility patches. For Linux 7.x:
+
+- NVIDIA will need to release updated drivers (likely 600+ series)
+- `devmem_folio_free()` and related APIs may change
+- DRM subsystem updates expected
+
+Current recommendation: Stay on 6.19.x until NVIDIA releases 7.x-compatible drivers.
 
 ## Building
 

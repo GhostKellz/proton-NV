@@ -1,25 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Proton-NV <proton-nv@nvidia-linux>
-Date: Sat, 29 Nov 2025 00:00:00 +0000
-Subject: [PATCH] winevulkan: NVIDIA Open Kernel Module 580+ optimizations
+Date: Mon, 27 Jan 2026 00:00:00 +0000
+Subject: [PATCH] winevulkan: NVIDIA Open Kernel Module 595+ optimizations
 
-Optimizations and tuning for NVIDIA Open Kernel Module 580+
+Optimizations and tuning for NVIDIA Open Kernel Module 595+
 targeting RTX 40/50 series GPUs.
 
 - Enable BAR1-aware memory allocations
 - Prefer dedicated allocations for large resources
 - Use VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT aggressively
 - Optimize descriptor pool sizing for modern GPUs
+- VK_EXT_descriptor_heap support enabled
+- Linux 7.x kernel compatibility preparation
 ---
 diff --git a/dlls/winevulkan/vulkan.c b/dlls/winevulkan/vulkan.c
 index 1111111..2222222 100644
 --- a/dlls/winevulkan/vulkan.c
 +++ b/dlls/winevulkan/vulkan.c
 @@ -1,6 +1,25 @@
- /* Wine Vulkan implementation - NVIDIA Open 580+ optimizations */
+ /* Wine Vulkan implementation - NVIDIA Open 595+ optimizations */
 
-+/* NVIDIA Open Kernel Module 580+ detection and optimization flags */
-+#define NVIDIA_OPEN_MIN_VERSION 580
++/* NVIDIA Open Kernel Module 595+ detection and optimization flags */
++#define NVIDIA_OPEN_MIN_VERSION 595
 +#define NVIDIA_RTX40_DEVICE_ID_START 0x2600
 +#define NVIDIA_RTX50_DEVICE_ID_START 0x2800
 +
@@ -47,7 +49,7 @@ index 3333333..4444444 100644
 --- a/dlls/winex11.drv/vulkan.c
 +++ b/dlls/winex11.drv/vulkan.c
 @@ -1,5 +1,15 @@
- /* NVIDIA Open 580+ Vulkan surface optimizations */
+ /* NVIDIA Open 595+ Vulkan surface optimizations */
 
 +/* Prefer mailbox present mode for lower latency on high-refresh displays */
 +static VkPresentModeKHR nvidia_preferred_present_modes[] = {
@@ -94,16 +96,27 @@ index 3333333..4444444 100644
 +    echo "NVIDIA_DRIVER_MAJOR=$major_version"
 +    echo "NVIDIA_OPEN_DRIVER=$is_open_driver"
 +
-+    # Check if meets minimum requirements
-+    if [ "$major_version" -ge 580 ] && [ "$is_open_driver" -eq 1 ]; then
++    # Check if meets minimum requirements (595+ for full optimization + descriptor heap)
++    if [ "$major_version" -ge 595 ] && [ "$is_open_driver" -eq 1 ]; then
 +        echo "PROTON_NV_OPTIMIZED=1"
-+        echo "# Proton-NV: NVIDIA Open $driver_version detected - all optimizations enabled"
-+    elif [ "$major_version" -ge 580 ]; then
++        echo "PROTON_NV_VKD3D3_READY=1"
++        echo "PROTON_NV_DESCRIPTOR_HEAP=1"
++        echo "# Proton-NV: NVIDIA Open $driver_version detected - all optimizations + descriptor heap enabled"
++    elif [ "$major_version" -ge 595 ]; then
 +        echo "PROTON_NV_OPTIMIZED=1"
++        echo "PROTON_NV_VKD3D3_READY=1"
++        echo "PROTON_NV_DESCRIPTOR_HEAP=1"
 +        echo "# Proton-NV: NVIDIA $driver_version detected - optimizations enabled (open driver recommended)"
++    elif [ "$major_version" -ge 590 ]; then
++        echo "PROTON_NV_OPTIMIZED=1"
++        echo "PROTON_NV_VKD3D3_READY=1"
++        echo "PROTON_NV_DESCRIPTOR_HEAP=0"
++        echo "# Proton-NV: NVIDIA $driver_version detected - upgrade to 595+ for descriptor heap"
 +    else
 +        echo "PROTON_NV_OPTIMIZED=0"
-+        echo "# Proton-NV: NVIDIA $driver_version detected - upgrade to 580+ recommended"
++        echo "PROTON_NV_VKD3D3_READY=0"
++        echo "PROTON_NV_DESCRIPTOR_HEAP=0"
++        echo "# Proton-NV: NVIDIA $driver_version detected - upgrade to 595+ required"
 +    fi
 +}
 +

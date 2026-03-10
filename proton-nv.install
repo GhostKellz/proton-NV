@@ -1,0 +1,18 @@
+post_install() {
+    echo ">>> Proton-NV installed!"
+    echo ""
+    echo "    The Proton runtime has been installed to:"
+    echo "    /usr/share/steam/compatibilitytools.d/"
+    echo ""
+    echo "    To use with Steam:"
+    echo "    1. Restart Steam"
+    echo "    2. Right-click game > Properties > Compatibility"
+    echo "    3. Select 'Proton-NV' from the dropdown"
+    echo ""
+    echo "    For per-user installation, symlink or copy to:"
+    echo "    ~/.local/share/Steam/compatibilitytools.d/"
+}
+
+post_upgrade() {
+    post_install
+}

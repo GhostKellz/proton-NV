@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Proton-NV <proton-nv@nvidia-linux>
+Date: Mon, 27 Jan 2026 00:00:00 +0000
+Subject: [PATCH] proton: VK_EXT_descriptor_heap detection and configuration
+
+Adds runtime detection for VK_EXT_descriptor_heap Vulkan extension.
+When available (NVIDIA 595+ or Vulkan beta 580.94.16+), enables
+optimized descriptor heap paths in vkd3d-proton for significant
+DX12 performance improvements.
+
+This patch prepares the groundwork - actual descriptor_heap usage
+requires vkd3d-proton with PR #2805 merged.
+
+See: https://github.com/HansKristian-Work/vkd3d-proton/pull/2805
+---
+diff --git a/proton-nv-descriptor-heap.sh b/proton-nv-descriptor-heap.sh
+new file mode 100755
+index 0000000..1234567
+--- /dev/null
++++ b/proton-nv-descriptor-heap.sh
+@@ -0,0 +1,89 @@
++#!/bin/bash
++# Proton-NV: VK_EXT_descriptor_heap Detection
++#
++# Checks for VK_EXT_descriptor_heap support and configures vkd3d-proton
++# for optimal DX12 performance on NVIDIA GPUs.
++#
++# Usage: source this script or run it to get environment exports
++
++PROTON_NV_DESCRIPTOR_HEAP_AVAILABLE=0
++PROTON_NV_DESCRIPTOR_HEAP_CONFIG=""
++
++detect_descriptor_heap() {
++    # Check if vulkaninfo is available
++    if ! command -v vulkaninfo &> /dev/null; then
++        echo "# vulkaninfo not found, cannot detect VK_EXT_descriptor_heap"
++        return 1
++    fi
++
++    # Check for VK_EXT_descriptor_heap extension
++    if vulkaninfo 2>/dev/null | grep -q "VK_EXT_descriptor_heap"; then
++        PROTON_NV_DESCRIPTOR_HEAP_AVAILABLE=1
++        echo "# VK_EXT_descriptor_heap: AVAILABLE"
++    else
++        echo "# VK_EXT_descriptor_heap: NOT AVAILABLE"
++        echo "# Requires NVIDIA 595+ or Vulkan beta 580.94.16+"
++        return 0
++    fi
++
++    # If available, configure vkd3d-proton to use it
++    if [ "$PROTON_NV_DESCRIPTOR_HEAP_AVAILABLE" -eq 1 ]; then
++        # Add descriptor_heap to VKD3D_CONFIG if not already present
++        if [ -z "$VKD3D_CONFIG" ]; then
++            PROTON_NV_DESCRIPTOR_HEAP_CONFIG="force_static_cbv,descriptor_heap"
++        elif [[ "$VKD3D_CONFIG" != *"descriptor_heap"* ]]; then
++            PROTON_NV_DESCRIPTOR_HEAP_CONFIG="${VKD3D_CONFIG},descriptor_heap"
++        else
++            PROTON_NV_DESCRIPTOR_HEAP_CONFIG="$VKD3D_CONFIG"
++        fi
++        echo "# VKD3D_CONFIG will be set to: $PROTON_NV_DESCRIPTOR_HEAP_CONFIG"
++    fi
++}
++
++# Export configuration if descriptor_heap is available
++export_descriptor_heap_config() {
++    if [ "$PROTON_NV_DESCRIPTOR_HEAP_AVAILABLE" -eq 1 ]; then
++        export VKD3D_CONFIG="$PROTON_NV_DESCRIPTOR_HEAP_CONFIG"
++        export PROTON_NV_DESCRIPTOR_HEAP=1
++        echo "export VKD3D_CONFIG=\"$PROTON_NV_DESCRIPTOR_HEAP_CONFIG\""
++        echo "export PROTON_NV_DESCRIPTOR_HEAP=1"
++    else
++        # Fallback to force_static_cbv only (still beneficial on NVIDIA)
++        export VKD3D_CONFIG="force_static_cbv"
++        export PROTON_NV_DESCRIPTOR_HEAP=0
++        echo "export VKD3D_CONFIG=\"force_static_cbv\""
++        echo "export PROTON_NV_DESCRIPTOR_HEAP=0"
++    fi
++}
++
++# Check driver version for descriptor_heap support hints
++check_driver_descriptor_heap_support() {
++    local driver_version=""
++
++    if command -v nvidia-smi &> /dev/null; then
++        driver_version=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
++        local major_version=$(echo "$driver_version" | cut -d. -f1)
++        local minor_version=$(echo "$driver_version" | cut -d. -f2)
++
++        echo "# NVIDIA Driver: $driver_version"
++
++        # Check if driver version likely has descriptor_heap
++        # 595+ stable or 580.94+ beta
++        if [ "$major_version" -ge 595 ]; then
++            echo "# Driver version supports VK_EXT_descriptor_heap (expected)"
++        elif [ "$major_version" -eq 580 ] && [ "$minor_version" -ge 94 ]; then
++            echo "# Vulkan beta driver - VK_EXT_descriptor_heap may be available"
++        else
++            echo "# Driver version may not have VK_EXT_descriptor_heap yet"
++            echo "# Consider upgrading to 595+ when available"
++        fi
++    fi
++}
++
++# Main execution
++if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
++    echo "# Proton-NV VK_EXT_descriptor_heap Detection"
++    echo "# =========================================="
++    check_driver_descriptor_heap_support
++    detect_descriptor_heap
++    export_descriptor_heap_config
++fi
+diff --git a/files/share/default_pfx/proton-nv-vkd3d-config.sh b/files/share/default_pfx/proton-nv-vkd3d-config.sh
+new file mode 100755
+index 0000000..2345678
+--- /dev/null
++++ b/files/share/default_pfx/proton-nv-vkd3d-config.sh
+@@ -0,0 +1,45 @@
++#!/bin/bash
++# Proton-NV: vkd3d-proton 3.0 Configuration
++#
++# Applied automatically by Proton-NV launcher
++# Optimizes vkd3d-proton for NVIDIA GPUs
++
++# Base configuration (always applied on NVIDIA)
++# force_static_cbv: NVIDIA-specific speed hack for constant buffers
++VKD3D_BASE_CONFIG="force_static_cbv"
++
++# Descriptor QA disabled for production (performance)
++export VKD3D_DISABLE_DESCRIPTOR_QA=1
++
++# Check for descriptor_heap support and configure accordingly
++setup_vkd3d_config() {
++    local config="$VKD3D_BASE_CONFIG"
++
++    # If VKD3D_CONFIG is already set by user, respect it
++    if [ -n "$VKD3D_CONFIG" ]; then
++        # Ensure force_static_cbv is included (NVIDIA optimization)
++        if [[ "$VKD3D_CONFIG" != *"force_static_cbv"* ]]; then
++            config="${VKD3D_CONFIG},force_static_cbv"
++        else
++            config="$VKD3D_CONFIG"
++        fi
++    fi
++
++    # Check if descriptor_heap should be added
++    # PROTON_NV_DESCRIPTOR_HEAP is set by detection script
++    if [ "${PROTON_NV_DESCRIPTOR_HEAP:-0}" -eq 1 ]; then
++        if [[ "$config" != *"descriptor_heap"* ]]; then
++            config="${config},descriptor_heap"
++        fi
++    fi
++
++    export VKD3D_CONFIG="$config"
++}
++
++# Run setup
++setup_vkd3d_config
++
++# Debug output if requested
++if [ "${PROTON_NV_DEBUG:-0}" -eq 1 ]; then
++    echo "[Proton-NV] VKD3D_CONFIG=$VKD3D_CONFIG"
++fi

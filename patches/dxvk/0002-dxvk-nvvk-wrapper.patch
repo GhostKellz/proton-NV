@@ -5,10 +5,10 @@ Wrapper class for nvvk low latency C API integration.
 Provides RAII resource management and convenient interface.
 
 ---
- src/dxvk/dxvk_nvvk.h   | 58 ++++++++++++++++++++++++++++++++++++++++++
- src/dxvk/dxvk_nvvk.cpp | 89 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- src/dxvk/meson.build   |  6 +++++
- 3 files changed, 153 insertions(+)
+ src/dxvk/dxvk_nvvk.h   |  58 ++++++++++++++++++++++++++++++++++++++++++
+ src/dxvk/dxvk_nvvk.cpp | 121 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/dxvk/meson.build   |   6 +++++
+ 3 files changed, 185 insertions(+)
 
 diff --git a/src/dxvk/dxvk_nvvk.h b/src/dxvk/dxvk_nvvk.h
 new file mode 100644
@@ -80,7 +80,7 @@ new file mode 100644
 index 0000000..2345678
 --- /dev/null
 +++ b/src/dxvk/dxvk_nvvk.cpp
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,121 @@
 +#include "dxvk_nvvk.h"
 +#include "../util/util_env.h"
 +#include "../util/log/log.h"
@@ -165,7 +165,39 @@ index 0000000..2345678
 +#endif
 +  }
 +
-+  // ... remaining methods follow same pattern
++  void DxvkNvvkLatency::beginPresent() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx) nvvk_low_latency_begin_present(m_ctx);
++#endif
++  }
++
++  void DxvkNvvkLatency::endPresent() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx) nvvk_low_latency_end_present(m_ctx);
++#endif
++  }
++
++  void DxvkNvvkLatency::markInputSample() {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx) nvvk_low_latency_mark_input_sample(m_ctx);
++#endif
++  }
++
++  void DxvkNvvkLatency::sleep(VkSemaphore semaphore, uint64_t value) {
++#if DXVK_NVVK_ENABLED
++    if (m_ctx && m_enabled)
++      nvvk_low_latency_sleep(m_ctx, reinterpret_cast<NvvkSemaphore>(semaphore), value);
++#endif
++  }
++
++  uint64_t DxvkNvvkLatency::getCurrentFrameId() const {
++#if DXVK_NVVK_ENABLED
++    return m_ctx ? nvvk_low_latency_get_frame_id(m_ctx) : 0;
++#else
++    return 0;
++#endif
++  }
++
 +}
 diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
 index 3456789..4567890 100644

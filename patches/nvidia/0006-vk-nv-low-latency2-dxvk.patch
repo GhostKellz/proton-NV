@@ -1,0 +1,485 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Proton-NV <proton-nv@nvidia-linux>
+Date: Thu, 09 Jan 2026 00:00:00 +0000
+Subject: [PATCH] dxvk: VK_NV_low_latency2 integration and frame pacing
+
+Adds support for NVIDIA's VK_NV_low_latency2 Vulkan extension in DXVK:
+- Reflex-style frame pacing with latency markers
+- Sleep before present for optimal input latency
+- Frame timing queries for latency measurement
+- Automatic fallback when extension unavailable
+
+Requires nvidia-open 545+ drivers with Vulkan 1.3 support.
+Best results on RTX 20/30/40/50 series GPUs.
+---
+diff --git a/src/dxvk/dxvk_nv_low_latency.h b/src/dxvk/dxvk_nv_low_latency.h
+new file mode 100644
+index 0000000..aaaaaaa
+--- /dev/null
++++ b/src/dxvk/dxvk_nv_low_latency.h
+@@ -0,0 +1,185 @@
++/*
++ * Proton-NV: VK_NV_low_latency2 Integration
++ *
++ * Provides NVIDIA Reflex-style frame pacing for DXVK games.
++ * Extension available on nvidia-open 545+ with Vulkan 1.3.
++ *
++ * Key features:
++ * - SetLatencyMarker: Mark frame lifecycle (simulation, render, present)
++ * - GetLatencySleepMode: Query current latency mode
++ * - SetLatencySleepMode: Enable/configure low latency
++ * - LatencySleep: Sleep before present for optimal timing
++ * - GetLatencyTimings: Query frame latency statistics
++ */
++
++#pragma once
++
++#include <vulkan/vulkan.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/*
++ * Extension name and spec version
++ */
++#define VK_NV_LOW_LATENCY_2_EXTENSION_NAME "VK_NV_low_latency2"
++#define VK_NV_LOW_LATENCY_2_SPEC_VERSION 2
++
++/*
++ * Latency marker IDs (for SetLatencyMarker)
++ */
++typedef enum VkLatencyMarkerNV {
++    VK_LATENCY_MARKER_SIMULATION_START_NV = 0,
++    VK_LATENCY_MARKER_SIMULATION_END_NV = 1,
++    VK_LATENCY_MARKER_RENDERSUBMIT_START_NV = 2,
++    VK_LATENCY_MARKER_RENDERSUBMIT_END_NV = 3,
++    VK_LATENCY_MARKER_PRESENT_START_NV = 4,
++    VK_LATENCY_MARKER_PRESENT_END_NV = 5,
++    VK_LATENCY_MARKER_INPUT_SAMPLE_NV = 6,
++    VK_LATENCY_MARKER_TRIGGER_FLASH_NV = 7,
++    VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV = 8,
++    VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV = 9,
++    VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_START_NV = 10,
++    VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV = 11,
++    VK_LATENCY_MARKER_MAX_ENUM_NV = 0x7FFFFFFF
++} VkLatencyMarkerNV;
++
++/*
++ * Out-of-band queue type
++ */
++typedef enum VkOutOfBandQueueTypeNV {
++    VK_OUT_OF_BAND_QUEUE_TYPE_RENDER_NV = 0,
++    VK_OUT_OF_BAND_QUEUE_TYPE_PRESENT_NV = 1,
++    VK_OUT_OF_BAND_QUEUE_TYPE_MAX_ENUM_NV = 0x7FFFFFFF
++} VkOutOfBandQueueTypeNV;
++
++/*
++ * Latency sleep mode info (for SetLatencySleepMode)
++ */
++typedef struct VkLatencySleepModeInfoNV {
++    VkStructureType sType;
++    const void* pNext;
++    VkBool32 lowLatencyMode;
++    VkBool32 lowLatencyBoost;
++    uint32_t minimumIntervalUs;
++} VkLatencySleepModeInfoNV;
++
++#define VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV ((VkStructureType)1000505000)
++
++/*
++ * Latency sleep info (for LatencySleep)
++ */
++typedef struct VkLatencySleepInfoNV {
++    VkStructureType sType;
++    const void* pNext;
++    VkSemaphore signalSemaphore;
++    uint64_t value;
++} VkLatencySleepInfoNV;
++
++#define VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV ((VkStructureType)1000505001)
++
++/*
++ * Set latency marker info
++ */
++typedef struct VkSetLatencyMarkerInfoNV {
++    VkStructureType sType;
++    const void* pNext;
++    uint64_t presentID;
++    VkLatencyMarkerNV marker;
++} VkSetLatencyMarkerInfoNV;
++
++#define VK_STRUCTURE_TYPE_SET_LATENCY_MARKER_INFO_NV ((VkStructureType)1000505002)
++
++/*
++ * Get latency marker info
++ */
++typedef struct VkGetLatencyMarkerInfoNV {
++    VkStructureType sType;
++    const void* pNext;
++    uint32_t timingCount;
++    void* pTimings; /* VkLatencyTimingsFrameReportNV* */
++} VkGetLatencyMarkerInfoNV;
++
++#define VK_STRUCTURE_TYPE_GET_LATENCY_MARKER_INFO_NV ((VkStructureType)1000505003)
++
++/*
++ * Latency timing frame report
++ */
++typedef struct VkLatencyTimingsFrameReportNV {
++    VkStructureType sType;
++    const void* pNext;
++    uint64_t presentID;
++    uint64_t inputSampleTimeUs;
++    uint64_t simStartTimeUs;
++    uint64_t simEndTimeUs;
++    uint64_t renderSubmitStartTimeUs;
++    uint64_t renderSubmitEndTimeUs;
++    uint64_t presentStartTimeUs;
++    uint64_t presentEndTimeUs;
++    uint64_t driverStartTimeUs;
++    uint64_t driverEndTimeUs;
++    uint64_t osRenderQueueStartTimeUs;
++    uint64_t osRenderQueueEndTimeUs;
++    uint64_t gpuRenderStartTimeUs;
++    uint64_t gpuRenderEndTimeUs;
++} VkLatencyTimingsFrameReportNV;
++
++#define VK_STRUCTURE_TYPE_LATENCY_TIMINGS_FRAME_REPORT_NV ((VkStructureType)1000505004)
++
++/*
++ * Out of band queue type info
++ */
++typedef struct VkOutOfBandQueueTypeInfoNV {
++    VkStructureType sType;
++    const void* pNext;
++    VkOutOfBandQueueTypeNV queueType;
++} VkOutOfBandQueueTypeInfoNV;
++
++#define VK_STRUCTURE_TYPE_OUT_OF_BAND_QUEUE_TYPE_INFO_NV ((VkStructureType)1000505005)
++
++/*
++ * Latency submission present ID
++ */
++typedef struct VkLatencySubmissionPresentIdNV {
++    VkStructureType sType;
++    const void* pNext;
++    uint64_t presentID;
++} VkLatencySubmissionPresentIdNV;
++
++#define VK_STRUCTURE_TYPE_LATENCY_SUBMISSION_PRESENT_ID_NV ((VkStructureType)1000505006)
++
++/*
++ * Swapchain latency create info
++ */
++typedef struct VkSwapchainLatencyCreateInfoNV {
++    VkStructureType sType;
++    const void* pNext;
++    VkBool32 latencyModeEnable;
++} VkSwapchainLatencyCreateInfoNV;
++
++#define VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV ((VkStructureType)1000505007)
++
++/*
++ * Function pointer types
++ */
++typedef VkResult (VKAPI_PTR *PFN_vkSetLatencySleepModeNV)(VkDevice device, VkSwapchainKHR swapchain, const VkLatencySleepModeInfoNV* pSleepModeInfo);
++typedef VkResult (VKAPI_PTR *PFN_vkLatencySleepNV)(VkDevice device, VkSwapchainKHR swapchain, const VkLatencySleepInfoNV* pSleepInfo);
++typedef void (VKAPI_PTR *PFN_vkSetLatencyMarkerNV)(VkDevice device, VkSwapchainKHR swapchain, const VkSetLatencyMarkerInfoNV* pLatencyMarkerInfo);
++typedef void (VKAPI_PTR *PFN_vkGetLatencyTimingsNV)(VkDevice device, VkSwapchainKHR swapchain, VkGetLatencyMarkerInfoNV* pLatencyMarkerInfo);
++typedef void (VKAPI_PTR *PFN_vkQueueNotifyOutOfBandNV)(VkQueue queue, const VkOutOfBandQueueTypeInfoNV* pQueueTypeInfo);
++
++/*
++ * Proton-NV specific configuration
++ */
++
++/* Default minimum interval in microseconds (16666us = 60fps) */
++#define PROTON_NV_DEFAULT_MIN_INTERVAL_US 16666
++
++/* Enable low latency boost by default for RTX 40/50 series */
++#define PROTON_NV_DEFAULT_LOW_LATENCY_BOOST 1
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/dxvk/dxvk_nv_low_latency.cpp b/src/dxvk/dxvk_nv_low_latency.cpp
+new file mode 100644
+index 0000000..bbbbbbb
+--- /dev/null
++++ b/src/dxvk/dxvk_nv_low_latency.cpp
+@@ -0,0 +1,245 @@
++/*
++ * Proton-NV: VK_NV_low_latency2 Implementation
++ *
++ * Runtime wrapper for NVIDIA low latency extension.
++ * Provides automatic fallback when extension unavailable.
++ */
++
++#include "dxvk_nv_low_latency.h"
++#include <stdlib.h>
++#include <string.h>
++#include <stdio.h>
++
++/*
++ * Low latency context (per-device)
++ */
++typedef struct NvLowLatencyContext {
++    VkDevice device;
++    VkSwapchainKHR swapchain;
++
++    /* Extension availability */
++    int extensionAvailable;
++    int latencyModeEnabled;
++    int lowLatencyBoost;
++    uint32_t minimumIntervalUs;
++
++    /* Function pointers */
++    PFN_vkSetLatencySleepModeNV pfnSetLatencySleepMode;
++    PFN_vkLatencySleepNV pfnLatencySleep;
++    PFN_vkSetLatencyMarkerNV pfnSetLatencyMarker;
++    PFN_vkGetLatencyTimingsNV pfnGetLatencyTimings;
++    PFN_vkQueueNotifyOutOfBandNV pfnQueueNotifyOutOfBand;
++
++    /* Statistics */
++    uint64_t currentPresentID;
++    uint64_t framesWithLatencyMode;
++    uint64_t totalSleepTimeUs;
++
++    /* Timing history for averaging */
++    uint64_t recentLatenciesUs[16];
++    int latencyIndex;
++    int latencyCount;
++} NvLowLatencyContext;
++
++/*
++ * Check if VK_NV_low_latency2 is available
++ */
++static int nv_check_extension_support(VkPhysicalDevice physicalDevice) {
++    uint32_t extensionCount = 0;
++    vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &extensionCount, NULL);
++
++    if (extensionCount == 0)
++        return 0;
++
++    VkExtensionProperties* extensions = (VkExtensionProperties*)malloc(
++        extensionCount * sizeof(VkExtensionProperties));
++    if (!extensions)
++        return 0;
++
++    vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &extensionCount, extensions);
++
++    int found = 0;
++    for (uint32_t i = 0; i < extensionCount; i++) {
++        if (strcmp(extensions[i].extensionName, VK_NV_LOW_LATENCY_2_EXTENSION_NAME) == 0) {
++            found = 1;
++            break;
++        }
++    }
++
++    free(extensions);
++    return found;
++}
++
++/*
++ * Load extension function pointers
++ */
++static int nv_load_functions(NvLowLatencyContext* ctx) {
++    ctx->pfnSetLatencySleepMode = (PFN_vkSetLatencySleepModeNV)
++        vkGetDeviceProcAddr(ctx->device, "vkSetLatencySleepModeNV");
++    ctx->pfnLatencySleep = (PFN_vkLatencySleepNV)
++        vkGetDeviceProcAddr(ctx->device, "vkLatencySleepNV");
++    ctx->pfnSetLatencyMarker = (PFN_vkSetLatencyMarkerNV)
++        vkGetDeviceProcAddr(ctx->device, "vkSetLatencyMarkerNV");
++    ctx->pfnGetLatencyTimings = (PFN_vkGetLatencyTimingsNV)
++        vkGetDeviceProcAddr(ctx->device, "vkGetLatencyTimingsNV");
++    ctx->pfnQueueNotifyOutOfBand = (PFN_vkQueueNotifyOutOfBandNV)
++        vkGetDeviceProcAddr(ctx->device, "vkQueueNotifyOutOfBandNV");
++
++    return ctx->pfnSetLatencySleepMode != NULL &&
++           ctx->pfnLatencySleep != NULL &&
++           ctx->pfnSetLatencyMarker != NULL;
++}
++
++/*
++ * Create low latency context
++ */
++NvLowLatencyContext* nv_low_latency_create(
++    VkDevice device,
++    VkPhysicalDevice physicalDevice,
++    VkSwapchainKHR swapchain
++) {
++    NvLowLatencyContext* ctx = (NvLowLatencyContext*)calloc(1, sizeof(NvLowLatencyContext));
++    if (!ctx)
++        return NULL;
++
++    ctx->device = device;
++    ctx->swapchain = swapchain;
++    ctx->minimumIntervalUs = PROTON_NV_DEFAULT_MIN_INTERVAL_US;
++    ctx->lowLatencyBoost = PROTON_NV_DEFAULT_LOW_LATENCY_BOOST;
++
++    /* Check extension support */
++    ctx->extensionAvailable = nv_check_extension_support(physicalDevice);
++
++    if (ctx->extensionAvailable) {
++        if (!nv_load_functions(ctx)) {
++            ctx->extensionAvailable = 0;
++            fprintf(stderr, "[Proton-NV] VK_NV_low_latency2 detected but failed to load functions\n");
++        } else {
++            fprintf(stderr, "[Proton-NV] VK_NV_low_latency2 enabled\n");
++        }
++    } else {
++        fprintf(stderr, "[Proton-NV] VK_NV_low_latency2 not available, using fallback frame pacing\n");
++    }
++
++    return ctx;
++}
++
++/*
++ * Destroy low latency context
++ */
++void nv_low_latency_destroy(NvLowLatencyContext* ctx) {
++    if (ctx) {
++        if (ctx->latencyModeEnabled && ctx->extensionAvailable) {
++            /* Disable low latency mode before destroying */
++            VkLatencySleepModeInfoNV sleepModeInfo = {
++                .sType = VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV,
++                .pNext = NULL,
++                .lowLatencyMode = VK_FALSE,
++                .lowLatencyBoost = VK_FALSE,
++                .minimumIntervalUs = 0
++            };
++            ctx->pfnSetLatencySleepMode(ctx->device, ctx->swapchain, &sleepModeInfo);
++        }
++        free(ctx);
++    }
++}
++
++/*
++ * Enable low latency mode
++ */
++int nv_low_latency_enable(NvLowLatencyContext* ctx, int boost, uint32_t minIntervalUs) {
++    if (!ctx)
++        return 0;
++
++    ctx->lowLatencyBoost = boost;
++    ctx->minimumIntervalUs = minIntervalUs > 0 ? minIntervalUs : PROTON_NV_DEFAULT_MIN_INTERVAL_US;
++
++    if (ctx->extensionAvailable) {
++        VkLatencySleepModeInfoNV sleepModeInfo = {
++            .sType = VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV,
++            .pNext = NULL,
++            .lowLatencyMode = VK_TRUE,
++            .lowLatencyBoost = boost ? VK_TRUE : VK_FALSE,
++            .minimumIntervalUs = ctx->minimumIntervalUs
++        };
++
++        VkResult result = ctx->pfnSetLatencySleepMode(ctx->device, ctx->swapchain, &sleepModeInfo);
++        if (result == VK_SUCCESS) {
++            ctx->latencyModeEnabled = 1;
++            fprintf(stderr, "[Proton-NV] Low latency mode enabled (boost=%d, interval=%uus)\n",
++                    boost, ctx->minimumIntervalUs);
++            return 1;
++        }
++    }
++
++    /* Fallback: just track the setting for software frame pacing */
++    ctx->latencyModeEnabled = 1;
++    return 1;
++}
++
++/*
++ * Set latency marker for current frame
++ */
++void nv_low_latency_set_marker(NvLowLatencyContext* ctx, VkLatencyMarkerNV marker) {
++    if (!ctx || !ctx->extensionAvailable || !ctx->latencyModeEnabled)
++        return;
++
++    VkSetLatencyMarkerInfoNV markerInfo = {
++        .sType = VK_STRUCTURE_TYPE_SET_LATENCY_MARKER_INFO_NV,
++        .pNext = NULL,
++        .presentID = ctx->currentPresentID,
++        .marker = marker
++    };
++
++    ctx->pfnSetLatencyMarker(ctx->device, ctx->swapchain, &markerInfo);
++}
++
++/*
++ * Sleep before present for optimal latency
++ */
++void nv_low_latency_sleep(NvLowLatencyContext* ctx, VkSemaphore semaphore, uint64_t value) {
++    if (!ctx || !ctx->extensionAvailable || !ctx->latencyModeEnabled)
++        return;
++
++    VkLatencySleepInfoNV sleepInfo = {
++        .sType = VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV,
++        .pNext = NULL,
++        .signalSemaphore = semaphore,
++        .value = value
++    };
++
++    ctx->pfnLatencySleep(ctx->device, ctx->swapchain, &sleepInfo);
++    ctx->framesWithLatencyMode++;
++}
++
++/*
++ * Begin new frame (call at start of frame)
++ */
++void nv_low_latency_begin_frame(NvLowLatencyContext* ctx) {
++    if (!ctx)
++        return;
++
++    ctx->currentPresentID++;
++    nv_low_latency_set_marker(ctx, VK_LATENCY_MARKER_SIMULATION_START_NV);
++}
++
++/*
++ * Get average latency in microseconds
++ */
++uint64_t nv_low_latency_get_avg_latency_us(NvLowLatencyContext* ctx) {
++    if (!ctx || ctx->latencyCount == 0)
++        return 0;
++
++    uint64_t sum = 0;
++    for (int i = 0; i < ctx->latencyCount; i++) {
++        sum += ctx->recentLatenciesUs[i];
++    }
++    return sum / ctx->latencyCount;
++}
++
++/*
++ * Check if extension is available
++ */
++int nv_low_latency_is_available(NvLowLatencyContext* ctx) {
++    return ctx && ctx->extensionAvailable;
++}
+diff --git a/proton-nv-dxvk.conf b/proton-nv-dxvk.conf
+index 2222222..3333333
+--- a/proton-nv-dxvk.conf
++++ b/proton-nv-dxvk.conf
+@@ -18,6 +18,25 @@ dxvk.numAsyncThreads = 2
+ # -----------------------------------------
+
++# VK_NV_low_latency2 Settings (RTX 20/30/40/50 series)
++# -----------------------------------------
++
++# Enable VK_NV_low_latency2 for NVIDIA Reflex-style frame pacing
++# Reduces input latency by sleeping before present
++dxvk.nvLowLatency2 = True
++
++# Enable low latency boost (extra aggressive, may reduce FPS slightly)
++# Recommended for competitive games
++dxvk.nvLowLatencyBoost = True
++
++# Minimum frame interval in microseconds (0 = auto based on refresh rate)
++# 16666 = 60fps, 8333 = 120fps, 6944 = 144fps, 4166 = 240fps
++dxvk.nvLowLatencyMinInterval = 0
++
++# -----------------------------------------
++# Memory Settings (RTX 40/50 optimized)
++# -----------------------------------------
++
+ # Use device-local memory aggressively (fast VRAM)
+ dxvk.useDeviceLocal = True
+

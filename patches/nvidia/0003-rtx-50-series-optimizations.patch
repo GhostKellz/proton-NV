@@ -21,28 +21,38 @@ index 0000000..1111111
 +/*
 + * Proton-NV: RTX 50 Series (Blackwell) Optimization Header
 + *
-+ * Device ID ranges:
-+ * - RTX 5090: 0x2900-0x29FF (anticipated)
-+ * - RTX 5080: 0x2A00-0x2AFF (anticipated)
-+ * - RTX 5070: 0x2B00-0x2BFF (anticipated)
-+ *
-+ * Note: Device IDs are preliminary and will be updated when 50 series releases
++ * Device ID ranges (validated January 2026):
++ * - RTX 5090: 0x2B80-0x2B8F (confirmed: 0x2B85 = GB202)
++ * - RTX 5090D: 0x2B90-0x2B9F (China variant)
++ * - RTX 5080: 0x2BA0-0x2BAF (anticipated)
++ * - RTX 5070 Ti: 0x2BB0-0x2BBF (anticipated)
++ * - RTX 5070: 0x2BC0-0x2BCF (anticipated)
 + */
 +
 +#ifndef PROTON_NV_RTX50_H
 +#define PROTON_NV_RTX50_H
 +
-+/* RTX 50 series device ID detection */
-+#define NVIDIA_RTX50_DEVICE_ID_MIN 0x2900
++/* RTX 50 series device ID detection (Blackwell GB2xx) */
++#define NVIDIA_RTX50_DEVICE_ID_MIN 0x2B00
 +#define NVIDIA_RTX50_DEVICE_ID_MAX 0x2FFF
 +
-+/* RTX 40 series for reference */
++/* RTX 5090 specific (GB202) */
++#define NVIDIA_RTX5090_DEVICE_ID 0x2B85
++#define NVIDIA_RTX5090_DEVICE_ID_MIN 0x2B80
++#define NVIDIA_RTX5090_DEVICE_ID_MAX 0x2B9F
++
++/* RTX 40 series for reference (Ada AD10x) */
 +#define NVIDIA_RTX40_DEVICE_ID_MIN 0x2600
-+#define NVIDIA_RTX40_DEVICE_ID_MAX 0x28FF
++#define NVIDIA_RTX40_DEVICE_ID_MAX 0x2AFF
 +
 +static inline int is_nvidia_rtx50(uint32_t device_id) {
 +    return device_id >= NVIDIA_RTX50_DEVICE_ID_MIN &&
 +           device_id <= NVIDIA_RTX50_DEVICE_ID_MAX;
++}
++
++static inline int is_nvidia_rtx5090(uint32_t device_id) {
++    return device_id >= NVIDIA_RTX5090_DEVICE_ID_MIN &&
++           device_id <= NVIDIA_RTX5090_DEVICE_ID_MAX;
 +}
 +
 +static inline int is_nvidia_rtx40(uint32_t device_id) {
@@ -148,7 +158,7 @@ index 0000000..2222222
 +++ b/dxvk-nv-tuning.conf
 @@ -0,0 +1,85 @@
 +# DXVK Configuration for Proton-NV
-+# Optimized for RTX 40/50 series + NVIDIA Open Driver 580+
++# Optimized for RTX 40/50 series + NVIDIA Open Driver 595+
 +
 +# -----------------------------------------
 +# Performance Settings
