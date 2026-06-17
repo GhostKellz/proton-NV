@@ -51,10 +51,21 @@ Proton-NV targets vkd3d-proton 3.0 with NVIDIA-specific tuning:
 ## Requirements
 
 - **GPU**: NVIDIA RTX 40 or 50 series (30 series may work)
-- **Driver**: NVIDIA Open Kernel Module 595+ (595.45.04+)
-  - Minimum: 590+ (without descriptor heap)
-- **Kernel**: CachyOS 6.19+, Linux-tkg 6.19+, or mainline 6.19+ (Linux 7.x when available)
+- **Driver**: NVIDIA Open Kernel Module
+  - 580+ minimum (without descriptor heap)
+  - 595+ for `VK_EXT_descriptor_heap`
+  - 600 / 610 branches supported and recommended
+- **Kernel**: CachyOS, Linux-tkg, linux-zen, or mainline on Linux 7.x (6.19 also supported)
 - **Steam**: For automatic Proton integration
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/README.md):
+
+- [Installation](docs/getting-started/installation.md) · [Quickstart](docs/getting-started/quickstart.md) · [Configuration](docs/getting-started/configuration.md)
+- [Build Options](docs/reference/build-options.md) · [Environment Variables](docs/reference/environment-variables.md)
+- [Driver Support](docs/guides/driver-support.md) · [Kernel Compatibility](docs/guides/kernel-compatibility.md) · [Steam Integration](docs/guides/steam-integration.md) · [Benchmarking](docs/guides/benchmarking.md)
+- [Architecture](docs/internals/architecture.md) · [Patches](docs/internals/patches.md)
 
 ## Installation
 
@@ -62,8 +73,8 @@ Proton-NV targets vkd3d-proton 3.0 with NVIDIA-specific tuning:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/proton-nv.git
-cd proton-nv
+git clone https://github.com/ghostkellz/proton-NV.git
+cd proton-NV
 
 # Configure (optional: customize build)
 ./configure.sh
@@ -77,7 +88,7 @@ make install
 
 ### Pre-built Releases
 
-Download from [Releases](https://github.com/ghostkellz/proton-nv/releases) and extract to:
+Download from [Releases](https://github.com/ghostkellz/proton-NV/releases) and extract to:
 ```
 ~/.local/share/Steam/compatibilitytools.d/Proton-NV-X.X/
 ```
@@ -140,23 +151,23 @@ DXVK_ASYNC=1 PROTON_ENABLE_REFLEX=1 %command%
 
 | Kernel | Scheduler | Proton-NV Support | Notes |
 |--------|-----------|-------------------|-------|
-| CachyOS 6.19+ | BORE+EEVDF | Full | Recommended |
-| Linux-tkg 6.19+ | BORE | Full | Recommended |
-| Linux-zen 6.19+ | EEVDF | Full | GCC required for NVIDIA build |
-| Mainline 6.19+ | EEVDF | Full | |
-| **Linux 7.x** | EEVDF | Pending | Awaiting NVIDIA driver update |
-| CachyOS-lto | BORE+EEVDF | Partial | Clang/LTO build issues with NVIDIA |
-| Older (<6.19) | CFS/EEVDF | Basic | Missing mm/folio API |
+| **CachyOS 7.x** | BORE+EEVDF | Full | Recommended |
+| Linux-tkg 7.x | BORE | Full | Recommended |
+| Linux-zen 7.x | EEVDF | Full | GCC recommended for NVIDIA build |
+| Mainline 7.x | EEVDF | Full | |
+| CachyOS-lto 7.x | BORE+EEVDF | Full | |
+| CachyOS / tkg 6.19 | BORE+EEVDF | Full | Still supported |
+| Older (<6.19) | CFS/EEVDF | Basic | Missing newer mm/folio API |
 
-### Linux 7.x Notes
+### Linux 7.x
 
-Linux 7.0 (expected late 2026) will introduce further mm/folio API changes. The NVIDIA 595 driver includes 6.19 compatibility patches. For Linux 7.x:
+Linux 7.x is the current recommended target, paired with the NVIDIA Open Kernel
+Module 600/610 branches that include the 7.x mm/folio and DRM updates. On a 7.x
+kernel with a 610 Open driver you get the full Proton-NV feature set, including
+the `VK_EXT_descriptor_heap` DX12 path. Kernel 6.19 remains fully supported.
 
-- NVIDIA will need to release updated drivers (likely 600+ series)
-- `devmem_folio_free()` and related APIs may change
-- DRM subsystem updates expected
-
-Current recommendation: Stay on 6.19.x until NVIDIA releases 7.x-compatible drivers.
+See [docs/guides/kernel-compatibility.md](docs/guides/kernel-compatibility.md)
+for details.
 
 ## Building
 
